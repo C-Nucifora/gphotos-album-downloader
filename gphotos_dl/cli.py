@@ -409,6 +409,20 @@ def _save_then_download_photo(
 ):
     """For one shared photo: Save it to the library, then download the library
     copy (the true original). Records under the shared photo_id for resume."""
+    # Safety net: never Save a video through the photo path. If a <video> is
+    # present, this was misclassified — route it correctly instead.
+    if lightbox.has_video(share_page):
+        if args.skip_videos:
+            metrics.record_skip()
+            bar.write(f"  skipped (video detected): {photo_id}")
+        else:
+            _process_download(
+                share_page, photo_id=photo_id, args=args, out_dir=out_dir,
+                manifest=manifest, event_timeout_ms=event_timeout_ms,
+                debug_dir=debug_dir, metrics=metrics, bar=bar, kind="video",
+            )
+        return
+
     shared_url = share_page.url
     library_id, clicked = saver.save_and_get_library_id(share_page)
     if not library_id:

@@ -85,24 +85,45 @@ def media_type_from_aria(label: str | None) -> str | None:
     return None
 
 
-def media_type(page) -> str:
+def has_video(page) -> bool:
+    """Quick check: is a <video> element currently mounted (i.e. a video item)?"""
+    try:
+        return bool(page.evaluate("() => !!document.querySelector('video')"))
+    except Exception:
+        return False
+
+
+def media_type(page, *, settle_ms: int = 2000) -> str:
     """Return 'photo' or 'video' for the currently-open lightbox item.
 
-    Primary signal is the item-container aria-label's leading token (research-
-    confirmed reliable); a mounted <video> element is corroboration. Motion
-    photos are labelled 'Photo', so they are correctly counted as photos.
-    Defaults to 'photo' when nothing is conclusive.
+    Detection is *polled* because reading immediately after navigation is
+    unreliable — the DOM (and the autoplaying <video>) lags the URL change, so a
+    single early read misclassifies videos as photos. We return 'video' the
+    moment a strong signal appears (a mounted <video>, or a 'Video -' aria-label),
+    conclude 'photo' early once a 'Photo -' label is seen with no video, and
+    otherwise wait out the settle window before defaulting to 'photo'. Motion
+    photos are labelled 'Photo' and correctly counted as photos.
     """
-    try:
-        probe = page.evaluate(_MEDIA_PROBE_JS)
-    except Exception:
-        probe = None
-    if probe:
-        kind = media_type_from_aria(probe.get("label"))
-        if kind:
-            return kind
-        if probe.get("hasVideo"):
-            return "video"
+    steps = max(1, settle_ms // 200)
+    saw_photo_label = False
+    for i in range(steps):
+        try:
+            probe = page.evaluate(_MEDIA_PROBE_JS)
+        except Exception:
+            probe = None
+        if probe:
+            if probe.get("hasVideo"):
+                return "video"
+            token = media_type_from_aria(probe.get("label"))
+            if token == "video":
+                return "video"
+            if token == "photo":
+                saw_photo_label = True
+        # A 'Photo' label with no <video> after a couple of checks is conclusive
+        # (videos autoplay their <video> within a few hundred ms).
+        if saw_photo_label and i >= 2:
+            return "photo"
+        page.wait_for_timeout(200)
     return "photo"
 
 
