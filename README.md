@@ -1,5 +1,7 @@
 # gphotos-album-downloader
 
+[![CI](https://github.com/C-Nucifora/gphotos-album-downloader/actions/workflows/ci.yml/badge.svg)](https://github.com/C-Nucifora/gphotos-album-downloader/actions/workflows/ci.yml)
+
 Mass-download **original-quality** photos from a large **shared** Google Photos
 album by driving the web UI with [Playwright](https://playwright.dev/python/).
 
