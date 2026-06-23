@@ -56,15 +56,12 @@ pip install .               # installs the gphotos-dl CLI + deps (playwright, tq
 playwright install chromium # one-time browser download (~150 MB)
 ```
 
-> **Editing the code?** Run it in place with `python -m gphotos_dl ...` from the
-> project root (no install needed) — this always works. The standard editable
-> install (`pip install -e .`) can *silently* fail to register on Python
-> 3.13+/3.14, leaving the `gphotos-dl` command unable to import `gphotos_dl`.
-> If you hit that, add the project root as a plain path file (this is what makes
-> live edits reflect through the console script):
-> ```bash
-> echo "$PWD" > "$(python -c 'import site; print(site.getsitepackages()[0])')/gphotos_dl_dev.pth"
-> ```
+> **Editing the code?** Either re-run `pip install .` after changes, or run it
+> in place with `python -m gphotos_dl ...` from the project root (no install
+> needed). Avoid `pip install -e .` here: editable installs can *silently* fail
+> to register on Python 3.13+/3.14, and a plain-path `.pth` is suppressed inside
+> conda-initialized shells — both leave `gphotos-dl` unable to import
+> `gphotos_dl`. A regular `pip install .` always works.
 >
 > If `pip install playwright` ever fails on a brand-new Python release (wheels
 > can lag), use Python 3.12 or 3.13 for the runtime. The pure-logic test suite
