@@ -206,18 +206,20 @@ def run(args) -> int:
                         bar.write("Returned to an already-seen photo; stopping.")
                         break
 
-                    # Detect photo vs video, and pause any autoplaying video the
-                    # automated browser just landed on (re-armed on every item).
-                    kind = lightbox.media_type(page)
-                    lightbox.pause_videos(page)
-
-                    if manifest.should_skip(
+                    skip = manifest.should_skip(
                         photo_id,
                         retry_suspect=args.retry_suspect,
                         retry_failed=args.retry_failed,
-                    ):
+                    )
+                    if skip:
+                        # Already done: just walk past it — no media probe, no
+                        # video pause, no dwell, and (below) no inter-item delay.
                         metrics.record_skip()
                     else:
+                        # Detect photo vs video, and pause any autoplaying video
+                        # the browser just landed on (re-armed on every item).
+                        kind = lightbox.media_type(page)
+                        lightbox.pause_videos(page)
                         record = downloader.download_current(
                             page,
                             out_dir=out_dir,
@@ -274,7 +276,9 @@ def run(args) -> int:
                         bar.write("Navigation left the album; stopping.")
                         break
 
-                    time.sleep(random.uniform(args.min_delay, args.max_delay))
+                    # Throttle only after a real download; skipping needs no delay.
+                    if not skip:
+                        time.sleep(random.uniform(args.min_delay, args.max_delay))
             finally:
                 bar.close()
                 manifest.close()
