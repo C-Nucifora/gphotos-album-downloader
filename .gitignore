@@ -1,0 +1,17 @@
+# Browser profile (contains your Google session — never commit)
+.gphotos-profile/
+*-profile/
+
+# Downloaded photos and the manifest
+downloads/
+*.jsonl
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+build/
+dist/

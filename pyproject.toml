@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gphotos-album-downloader"
+version = "0.1.0"
+description = "Mass-download original-quality photos from a large shared Google Photos album via the web UI"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "playwright>=1.49",
+    "tqdm>=4.66",
+    "Pillow>=10.0",
+]
+
+[project.scripts]
+gphotos-dl = "gphotos_dl.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["gphotos_dl*"]
