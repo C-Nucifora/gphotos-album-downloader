@@ -52,19 +52,23 @@ cd ~/Documents/dev/personal/gphotos-album-downloader
 python3 -m venv .venv
 source .venv/bin/activate
 
-# editable install. compat mode is required on Python 3.13+/3.14, where the
-# default PEP 660 "code-in-.pth" editable hook silently fails to register
-# (the console script then can't import gphotos_dl).
-pip install -e . --config-settings editable_mode=compat
+pip install .               # installs the gphotos-dl CLI + deps (playwright, tqdm, Pillow)
 playwright install chromium # one-time browser download (~150 MB)
 ```
 
+> **Editing the code?** Run it in place with `python -m gphotos_dl ...` from the
+> project root (no install needed) — this always works. The standard editable
+> install (`pip install -e .`) can *silently* fail to register on Python
+> 3.13+/3.14, leaving the `gphotos-dl` command unable to import `gphotos_dl`.
+> If you hit that, add the project root as a plain path file (this is what makes
+> live edits reflect through the console script):
+> ```bash
+> echo "$PWD" > "$(python -c 'import site; print(site.getsitepackages()[0])')/gphotos_dl_dev.pth"
+> ```
+>
 > If `pip install playwright` ever fails on a brand-new Python release (wheels
 > can lag), use Python 3.12 or 3.13 for the runtime. The pure-logic test suite
 > runs on any Python with no third-party deps.
->
-> You can always run the tool without installing it via `python -m gphotos_dl`
-> from the project root.
 
 ## Usage
 
