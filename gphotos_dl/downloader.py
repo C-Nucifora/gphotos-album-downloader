@@ -184,10 +184,17 @@ def download_current(
     cleanup: bool = False,
     sequential: bool = False,
     debug_dir: str | None = None,
+    photo_id: str | None = None,
 ) -> Record:
-    """Download the open item and return a manifest Record (not yet appended)."""
+    """Download the open item and return a manifest Record (not yet appended).
+
+    ``photo_id`` may be supplied to key the record on a different id than the
+    current page's URL — used by save-to-library mode, where the file is fetched
+    from the library copy but must be recorded under the shared-album id so
+    resume works.
+    """
     url = page.url
-    photo_id = photo_id_from_url(url) or url
+    photo_id = photo_id or photo_id_from_url(url) or url
 
     prepare_for_download(page)
     if dwell_s > 0:

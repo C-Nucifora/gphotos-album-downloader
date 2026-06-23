@@ -18,7 +18,7 @@ import random
 import sys
 import time
 
-from . import __version__, browser, downloader, lightbox
+from . import __version__, browser, downloader, lightbox, saver
 from .metrics import TypeMetrics
 from .navigation import NavigationTracker, StopReason
 from .state import STATUS_FAILED, STATUS_SUSPECT, Manifest, Record
@@ -124,6 +124,13 @@ def build_parser() -> argparse.ArgumentParser:
         "Google exposes the saved library copy's id, then exit",
     )
     p.add_argument(
+        "--save-to-library",
+        action="store_true",
+        help="get true originals (e.g. RAW) for shared PHOTOS by Saving each to "
+        "your library and downloading that copy. Videos download directly. NOTE: "
+        "saved copies are left in your library (storage); auto-cleanup is separate.",
+    )
+    p.add_argument(
         "--limit",
         type=int,
         default=0,
@@ -217,6 +224,7 @@ def _process_download(
         cleanup=args.cleanup,
         sequential=args.sequential,
         debug_dir=debug_dir,
+        photo_id=photo_id,
     )
     manifest.append(record)
     if record.status == STATUS_FAILED:
@@ -370,6 +378,115 @@ def _run_targeted(page, args, out_dir, manifest, metrics, tqdm, event_timeout_ms
         bar.close()
 
 
+def _save_then_download_photo(
+    share_page, lib_page, *, photo_id, args, out_dir, manifest,
+    event_timeout_ms, debug_dir, metrics, bar,
+):
+    """For one shared photo: Save it to the library, then download the library
+    copy (the true original). Records under the shared photo_id for resume."""
+    shared_url = share_page.url
+    library_id = saver.save_and_get_library_id(share_page)
+    if not library_id:
+        manifest.append(Record(
+            photo_id=photo_id, status=STATUS_FAILED, url=shared_url, media_type="photo",
+            note="save-to-library: no new library id captured after clicking Save",
+        ))
+        metrics.record_failure("photo")
+        bar.write(f"  failed (photo): {photo_id} — Save produced no library id")
+        return
+    if not saver.open_library_item(lib_page, library_id):
+        manifest.append(Record(
+            photo_id=photo_id, status=STATUS_FAILED,
+            url=saver.LIBRARY_PHOTO_URL.format(library_id), media_type="photo",
+            note=f"save-to-library: could not open saved copy {library_id}",
+        ))
+        metrics.record_failure("photo")
+        bar.write(f"  failed (photo): {photo_id} — could not open saved copy")
+        return
+    # Download the owned library copy (full original), recorded under shared id.
+    _process_download(
+        lib_page, photo_id=photo_id, args=args, out_dir=out_dir, manifest=manifest,
+        event_timeout_ms=event_timeout_ms, debug_dir=debug_dir, metrics=metrics,
+        bar=bar, kind="photo",
+    )
+
+
+def _run_save_mode(share_page, context, args, out_dir, manifest, metrics, tqdm,
+                   event_timeout_ms, nav_timeout_ms, debug_dir):
+    """Walk the shared album; for each photo Save-to-library then download the
+    library copy (true original). Videos download directly from the share."""
+    lib_page = context.new_page()
+    tracker = NavigationTracker()
+    bar = tqdm(total=None, unit="item", desc="Save+download")
+    try:
+        processed = 0
+        while True:
+            photo_id = photo_id_from_url(share_page.url)
+            if photo_id is None:
+                bar.write("Left the photo view; stopping.")
+                break
+            if photo_id in tracker:
+                bar.write("Returned to an already-seen item; stopping.")
+                break
+
+            skip = manifest.should_skip(
+                photo_id, retry_suspect=args.retry_suspect, retry_failed=args.retry_failed,
+            )
+            if skip:
+                metrics.record_skip()
+            else:
+                kind = lightbox.media_type(share_page)
+                lightbox.pause_videos(share_page)
+                if _type_skipped(kind, args):
+                    skip = True
+                    metrics.record_skip()
+                elif kind == "video":
+                    # Videos already come full-res from the share — download directly.
+                    _process_download(
+                        share_page, photo_id=photo_id, args=args, out_dir=out_dir,
+                        manifest=manifest, event_timeout_ms=event_timeout_ms,
+                        debug_dir=debug_dir, metrics=metrics, bar=bar, kind="video",
+                    )
+                else:
+                    _save_then_download_photo(
+                        share_page, lib_page, photo_id=photo_id, args=args, out_dir=out_dir,
+                        manifest=manifest, event_timeout_ms=event_timeout_ms,
+                        debug_dir=debug_dir, metrics=metrics, bar=bar,
+                    )
+
+            tracker.mark_seen(photo_id)
+            processed += 1
+            bar.update(1)
+            bar.set_postfix(**metrics.postfix())
+
+            if args.limit and processed >= args.limit:
+                bar.write(f"Reached --limit of {args.limit}; stopping.")
+                break
+
+            try:
+                changed = lightbox.goto_next(share_page, timeout_ms=nav_timeout_ms)
+            except Exception as exc:
+                bar.write(f"Navigation error: {exc}; stopping (progress saved).")
+                break
+            reason = tracker.evaluate(new_url=share_page.url, url_changed=changed)
+            if reason is not StopReason.CONTINUE:
+                bar.write({
+                    StopReason.URL_STABLE: "Reached the end of the album.",
+                    StopReason.REVISITED: "Looped back to a seen item; reached the end.",
+                    StopReason.NOT_A_PHOTO: "Navigation left the album; stopping.",
+                }.get(reason, "Stopping."))
+                break
+
+            if not skip:
+                time.sleep(random.uniform(args.min_delay, args.max_delay))
+    finally:
+        bar.close()
+        try:
+            lib_page.close()
+        except Exception:
+            pass
+
+
 def _record_targeted_failure(manifest, metrics, bar, target, note):
     record = Record(
         photo_id=target["photo_id"],
@@ -426,7 +543,14 @@ def run(args) -> int:
             manifest = Manifest(manifest_path, scan_dir=out_dir)
             metrics = TypeMetrics()
             try:
-                if args.targeted:
+                if args.save_to_library:
+                    if not args.start_open:
+                        lightbox.open_first_photo(page)
+                    _run_save_mode(
+                        page, context, args, out_dir, manifest, metrics, tqdm,
+                        event_timeout_ms, nav_timeout_ms, debug_dir,
+                    )
+                elif args.targeted:
                     _run_targeted(
                         page, args, out_dir, manifest, metrics, tqdm,
                         event_timeout_ms, debug_dir,

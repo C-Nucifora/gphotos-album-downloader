@@ -44,6 +44,42 @@ the official API** for faithful originals.
 
 ---
 
+## Getting full-resolution / RAW originals (`--save-to-library`)
+
+For a **shared album you don't own**, Google serves the normal download as a
+**recompressed JPEG derivative** — e.g. a 24MP Sony `.ARW` comes back as a
+~300KB JPEG named `DSC0001.ARW.jpg`, full-dimension but heavily compressed. This
+is Google's doing and **no download timing or API setting fixes it**.
+
+The only way to get the true original is to **Save the shared photo into your
+own library first**, then download *that* copy. `--save-to-library` automates it:
+for each photo it clicks **Save**, finds the new library item, and downloads the
+original (e.g. the real 24MB `.ARW`). Videos already come full-res from the
+share, so they download directly (use `--skip-videos` to ignore them).
+
+```bash
+gphotos-dl "<album-url>" --out ~/Pictures/uqr-raws --save-to-library
+```
+
+> ### ⚠️ This mode writes to your Google account and (will) delete from it
+> - **It copies every shared photo into YOUR library.** ~900 RAWs ≈ **20+GB**
+>   against your Google storage quota.
+> - **Storage management — Option A (auto-empty Trash):** to stay under your
+>   quota, the batched cleanup deletes each downloaded copy from **your personal
+>   library** and then **EMPTIES YOUR GOOGLE PHOTOS TRASH** between batches.
+>   **Emptying Trash is global and irreversible — it permanently deletes
+>   _everything_ currently in your Trash, including items this tool never
+>   touched.** Make sure your Trash holds nothing you want before running.
+> - It **never** deletes anything from the shared album — only from your own
+>   library/Trash.
+>
+> *(Status: save → download-original is implemented. The batched auto-delete +
+> auto-empty-Trash cleanup is being added next and is gated behind this same
+> mode; until then, saved copies remain in your library and you should
+> bulk-delete them yourself.)*
+
+---
+
 ## Install
 
 Requires Python 3.10+ (tested on 3.14). A virtual environment is recommended
