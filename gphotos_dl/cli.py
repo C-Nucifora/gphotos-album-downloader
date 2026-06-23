@@ -426,17 +426,24 @@ def _save_then_download_photo(
     shared_url = share_page.url
     library_id, clicked = saver.save_and_get_library_id(share_page)
     if not library_id:
+        # Capture the live toolbar so we can see the real Save control / login state.
+        context = downloader._capture_failure_context(share_page)
+        if debug_dir:
+            downloader._write_debug(
+                debug_dir, photo_id,
+                {"url": shared_url, "clicked_save": clicked, "phase": "save", **context},
+            )
+        controls = context.get("controls")
         if not clicked:
-            note = ("save-to-library: 'Save' control not found — are you signed in? "
-                    "Shared albums are viewable while logged out, but Saving needs "
-                    "sign-in. Run once with --login.")
+            note = ("save-to-library: 'Save' control not found — signed in? "
+                    f"controls={controls}")
             short = "Save control not found (signed in? try --login)"
         else:
-            note = "save-to-library: clicked Save but no new library id appeared in the response"
+            note = f"save-to-library: clicked Save but no new library id. controls={controls}"
             short = "clicked Save but no library id"
         manifest.append(Record(
             photo_id=photo_id, status=STATUS_FAILED, url=shared_url, media_type="photo",
-            note=note,
+            note=note[:600],
         ))
         metrics.record_failure("photo")
         bar.write(f"  failed (photo): {photo_id} — {short}")
