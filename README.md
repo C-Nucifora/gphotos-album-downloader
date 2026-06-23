@@ -48,17 +48,23 @@ Requires Python 3.10+ (tested on 3.14). A virtual environment is recommended
 (and required on Homebrew Python due to PEP 668).
 
 ```bash
-cd ~/dev/gphotos-album-downloader
+cd ~/Documents/dev/personal/gphotos-album-downloader
 python3 -m venv .venv
 source .venv/bin/activate
 
-pip install -e .            # installs playwright, tqdm, Pillow + the CLI
+# editable install. compat mode is required on Python 3.13+/3.14, where the
+# default PEP 660 "code-in-.pth" editable hook silently fails to register
+# (the console script then can't import gphotos_dl).
+pip install -e . --config-settings editable_mode=compat
 playwright install chromium # one-time browser download (~150 MB)
 ```
 
 > If `pip install playwright` ever fails on a brand-new Python release (wheels
 > can lag), use Python 3.12 or 3.13 for the runtime. The pure-logic test suite
 > runs on any Python with no third-party deps.
+>
+> You can always run the tool without installing it via `python -m gphotos_dl`
+> from the project root.
 
 ## Usage
 
