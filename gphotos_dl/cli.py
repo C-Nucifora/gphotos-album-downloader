@@ -12,6 +12,7 @@ Both record to a resumable JSONL manifest and are safe to Ctrl-C and resume.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import random
 import sys
@@ -107,6 +108,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="on each failure, write the live DOM (item label, controls) to <out>/debug",
     )
     p.add_argument(
+        "--skip-videos",
+        action="store_true",
+        help="don't download videos (they already come full-res from the share)",
+    )
+    p.add_argument(
+        "--skip-photos",
+        action="store_true",
+        help="don't download photos (e.g. to grab only videos)",
+    )
+    p.add_argument(
+        "--probe-save",
+        action="store_true",
+        help="diagnostic: click 'Save' on the first/open photo and report how "
+        "Google exposes the saved library copy's id, then exit",
+    )
+    p.add_argument(
         "--limit",
         type=int,
         default=0,
@@ -165,6 +182,10 @@ def _resume_hint(args) -> str:
     )
 
 
+def _type_skipped(kind, args) -> bool:
+    return (kind == "video" and args.skip_videos) or (kind == "photo" and args.skip_photos)
+
+
 def _process_download(
     page,
     *,
@@ -176,10 +197,12 @@ def _process_download(
     debug_dir,
     metrics,
     bar,
+    kind=None,
     fallback_kind="photo",
 ):
-    """Detect type, pause video, download the open item, record it, tally."""
-    kind = lightbox.media_type(page) or fallback_kind
+    """Pause video, download the open item, record it, tally. ``kind`` may be
+    passed in to avoid a second media-type probe."""
+    kind = kind or lightbox.media_type(page) or fallback_kind
     lightbox.pause_videos(page)
     record = downloader.download_current(
         page,
@@ -239,17 +262,23 @@ def _run_walk(page, args, out_dir, manifest, metrics, tqdm, event_timeout_ms, na
                 # and (below) no inter-item delay.
                 metrics.record_skip()
             else:
-                _process_download(
-                    page,
-                    photo_id=photo_id,
-                    args=args,
-                    out_dir=out_dir,
-                    manifest=manifest,
-                    event_timeout_ms=event_timeout_ms,
-                    debug_dir=debug_dir,
-                    metrics=metrics,
-                    bar=bar,
-                )
+                kind = lightbox.media_type(page)
+                if _type_skipped(kind, args):
+                    skip = True  # treat as a cheap skip (no download, no delay)
+                    metrics.record_skip()
+                else:
+                    _process_download(
+                        page,
+                        photo_id=photo_id,
+                        args=args,
+                        out_dir=out_dir,
+                        manifest=manifest,
+                        event_timeout_ms=event_timeout_ms,
+                        debug_dir=debug_dir,
+                        metrics=metrics,
+                        bar=bar,
+                        kind=kind,
+                    )
 
             tracker.mark_seen(photo_id)
             processed += 1
@@ -318,18 +347,22 @@ def _run_targeted(page, args, out_dir, manifest, metrics, tqdm, event_timeout_ms
                 bar.set_postfix(**metrics.postfix())
                 continue
 
-            _process_download(
-                page,
-                photo_id=pid,
-                args=args,
-                out_dir=out_dir,
-                manifest=manifest,
-                event_timeout_ms=event_timeout_ms,
-                debug_dir=debug_dir,
-                metrics=metrics,
-                bar=bar,
-                fallback_kind=target.get("media_type") or "photo",
-            )
+            kind = lightbox.media_type(page) or (target.get("media_type") or "photo")
+            if _type_skipped(kind, args):
+                metrics.record_skip()
+            else:
+                _process_download(
+                    page,
+                    photo_id=pid,
+                    args=args,
+                    out_dir=out_dir,
+                    manifest=manifest,
+                    event_timeout_ms=event_timeout_ms,
+                    debug_dir=debug_dir,
+                    metrics=metrics,
+                    bar=bar,
+                    kind=kind,
+                )
             bar.update(1)
             bar.set_postfix(**metrics.postfix())
             time.sleep(random.uniform(args.min_delay, args.max_delay))
@@ -380,6 +413,15 @@ def run(args) -> int:
             except Exception as exc:
                 raise RuntimeError(f"Failed to load the album page: {exc}") from exc
             page.wait_for_timeout(2_000)
+
+            if args.probe_save:
+                from . import probe
+
+                if not args.start_open:
+                    lightbox.open_first_photo(page)
+                result = probe.probe_save(page)
+                print(json.dumps(result, indent=2))
+                return 0
 
             manifest = Manifest(manifest_path, scan_dir=out_dir)
             metrics = TypeMetrics()
