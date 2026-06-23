@@ -8,8 +8,64 @@ from gphotos_dl.state import (
     STATUS_SUSPECT,
     Manifest,
     Record,
+    build_name,
     dedupe_filename,
+    tidy_stem,
 )
+
+
+class TidyStemTests(unittest.TestCase):
+    def test_spaces_and_copy_suffix(self):
+        self.assertEqual(tidy_stem("IMG 1234 (1)"), "IMG_1234")
+
+    def test_illegal_chars_removed(self):
+        self.assertEqual(tidy_stem("a/b:c name"), "abc_name")
+
+    def test_collapses_repeated_separators(self):
+        self.assertEqual(tidy_stem("photo___name"), "photo_name")
+
+    def test_empty_falls_back(self):
+        self.assertEqual(tidy_stem("   "), "image")
+
+    def test_dotted_names_preserved(self):
+        self.assertEqual(tidy_stem("a.b.c"), "a.b.c")
+
+
+class BuildNameTests(unittest.TestCase):
+    def test_cleanup(self):
+        self.assertEqual(
+            build_name("IMG 1234 (1).JPG", photo_id="X", cleanup=True), "IMG_1234.jpg"
+        )
+
+    def test_prefix_verbatim_no_cleanup(self):
+        self.assertEqual(
+            build_name("IMG_1234.JPG", photo_id="X", prefix="uqr-"), "uqr-IMG_1234.jpg"
+        )
+
+    def test_sequential(self):
+        self.assertEqual(
+            build_name("whatever.mov", photo_id="X", sequential=True, seq_index=7),
+            "0007.mov",
+        )
+
+    def test_sequential_with_prefix(self):
+        self.assertEqual(
+            build_name(
+                "x.jpg", photo_id="X", prefix="uqr-", sequential=True, seq_index=3
+            ),
+            "uqr-0003.jpg",
+        )
+
+    def test_cleanup_with_prefix(self):
+        self.assertEqual(
+            build_name("My Photo (2).PNG", photo_id="X", cleanup=True, prefix="a_"),
+            "a_My_Photo.png",
+        )
+
+    def test_empty_suggested_uses_photo_id_and_default_ext(self):
+        self.assertEqual(
+            build_name("", photo_id="AF1", default_ext=".mp4"), "AF1.mp4"
+        )
 
 
 class DedupeTests(unittest.TestCase):
@@ -73,6 +129,18 @@ class ManifestTests(unittest.TestCase):
         second = m.reserve_filename("photo.jpg")
         self.assertEqual(first, "photo.jpg")
         self.assertEqual(second, "photo (1).jpg")
+
+    def test_reserve_sequential_increments(self):
+        m = Manifest(self.path)
+        a = m.reserve("first.jpg", photo_id="1", sequential=True)
+        b = m.reserve("second.mov", photo_id="2", sequential=True)
+        self.assertEqual(a, "0001.jpg")
+        self.assertEqual(b, "0002.mov")
+
+    def test_reserve_cleanup_and_prefix(self):
+        m = Manifest(self.path)
+        name = m.reserve("My Pic (1).JPG", photo_id="1", cleanup=True, prefix="uqr-")
+        self.assertEqual(name, "uqr-My_Pic.jpg")
 
     def test_scan_dir_seeds_used_filenames(self):
         # A file landed on disk but its record was never appended (crash window).

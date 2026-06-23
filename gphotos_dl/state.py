@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 
@@ -33,11 +34,13 @@ class Record:
     status: str
     filename: str | None = None
     url: str | None = None
+    media_type: str | None = None
     bytes: int | None = None
     width: int | None = None
     height: int | None = None
     has_exif: bool | None = None
     attempts: int = 0
+    seconds: float | None = None
     note: str | None = None
     ts: str | None = None
 
@@ -46,6 +49,54 @@ class Record:
         if data.get("ts") is None:
             data["ts"] = datetime.now(timezone.utc).isoformat()
         return json.dumps(data, ensure_ascii=False)
+
+
+# Characters that are illegal in filenames on common filesystems.
+_ILLEGAL = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+# A trailing OS/Google "copy" marker like " (1)" or "(12)".
+_COPY_SUFFIX = re.compile(r"\s*\(\d+\)\s*$")
+# Runs of separators to collapse.
+_SEPS = re.compile(r"[\s._-]*[\s_-][\s._-]*")
+
+
+def tidy_stem(stem: str) -> str:
+    """Clean a filename stem: drop filesystem-illegal chars, a trailing copy
+    marker, and collapse separator runs to single underscores.
+
+    'IMG 1234 (1)' -> 'IMG_1234'   ;   'a/b:c name' -> 'abc_name'
+    """
+    s = _ILLEGAL.sub("", stem)
+    s = _COPY_SUFFIX.sub("", s).strip()
+    s = _SEPS.sub("_", s)
+    s = s.strip("._-")
+    return s or "image"
+
+
+def build_name(
+    suggested: str,
+    *,
+    photo_id: str,
+    prefix: str = "",
+    cleanup: bool = False,
+    sequential: bool = False,
+    seq_index: int | None = None,
+    default_ext: str = ".jpg",
+) -> str:
+    """Compute a download filename (before de-duplication).
+
+    Pipeline: choose base name -> sequential numbering OR cleanup of the stem ->
+    prepend prefix verbatim. The extension is preserved and lower-cased.
+    """
+    base = suggested or f"{photo_id}{default_ext}"
+    stem, ext = os.path.splitext(base)
+    ext = (ext or default_ext).lower()
+
+    if sequential and seq_index is not None:
+        stem = f"{seq_index:04d}"
+    elif cleanup:
+        stem = tidy_stem(stem)
+
+    return f"{prefix}{stem}{ext}"
 
 
 def dedupe_filename(name: str, used: set[str]) -> str:
@@ -139,6 +190,33 @@ class Manifest:
         name = dedupe_filename(desired, self.used_filenames)
         self.used_filenames.add(name)
         return name
+
+    def reserve(
+        self,
+        suggested: str,
+        *,
+        photo_id: str,
+        prefix: str = "",
+        cleanup: bool = False,
+        sequential: bool = False,
+        default_ext: str = ".jpg",
+    ) -> str:
+        """Build the final filename (cleanup/sequential/prefix), de-dupe, reserve.
+
+        Sequential numbers continue from the count of files already reserved, so
+        a resumed run keeps numbering upward rather than colliding.
+        """
+        seq_index = len(self.used_filenames) + 1 if sequential else None
+        name = build_name(
+            suggested,
+            photo_id=photo_id,
+            prefix=prefix,
+            cleanup=cleanup,
+            sequential=sequential,
+            seq_index=seq_index,
+            default_ext=default_ext,
+        )
+        return self.reserve_filename(name)
 
     def append(self, record: Record) -> None:
         if self._fh is None:

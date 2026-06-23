@@ -15,9 +15,11 @@ import sys
 PHOTOS_HOME = "https://photos.google.com"
 
 # Reduce the most obvious automation fingerprint; helps avoid Google login walls.
+# --mute-audio guarantees silence even if a video re-arms autoplay mid-walk.
 _LAUNCH_ARGS = [
     "--disable-blink-features=AutomationControlled",
     "--start-maximized",
+    "--mute-audio",
 ]
 
 

@@ -14,8 +14,9 @@ import sys
 import time
 
 from . import __version__, browser, downloader, lightbox
+from .metrics import TypeMetrics
 from .navigation import NavigationTracker, StopReason
-from .state import STATUS_SUSPECT, Manifest
+from .state import STATUS_FAILED, STATUS_SUSPECT, Manifest
 from .urls import photo_id_from_url
 
 
@@ -48,8 +49,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--download-timeout",
         type=float,
-        default=120.0,
-        help="seconds to wait for a single download to start/finish",
+        default=30.0,
+        help="seconds to wait for a download to START after Shift+D (a real one "
+        "starts in 1-2s); the file transfer itself then runs as long as needed",
     )
     p.add_argument(
         "--nav-timeout",
@@ -57,7 +59,27 @@ def build_parser() -> argparse.ArgumentParser:
         default=8.0,
         help="seconds to wait for the lightbox to advance to the next photo",
     )
-    p.add_argument("--max-retries", type=int, default=3, help="download attempts per photo")
+    p.add_argument("--max-retries", type=int, default=3, help="download attempts per item")
+    p.add_argument(
+        "--prefix",
+        default="",
+        help="string prepended verbatim to every filename, e.g. 'uqr-'",
+    )
+    p.add_argument(
+        "--cleanup",
+        action="store_true",
+        help="tidy filenames: strip unsafe chars/copy-suffixes, collapse separators",
+    )
+    p.add_argument(
+        "--sequential",
+        action="store_true",
+        help="rename downloads to zero-padded numbers in order (0001.jpg, ...)",
+    )
+    p.add_argument(
+        "--debug",
+        action="store_true",
+        help="on each failure, write the live DOM (item label, controls) to <out>/debug",
+    )
     p.add_argument(
         "--suspect-max-edge",
         type=int,
@@ -142,8 +164,9 @@ def run(args) -> int:
     profile_dir = os.path.abspath(args.profile)
     tqdm = _load_tqdm()
 
-    download_timeout_ms = int(args.download_timeout * 1000)
+    event_timeout_ms = int(args.download_timeout * 1000)
     nav_timeout_ms = int(args.nav_timeout * 1000)
+    debug_dir = os.path.join(out_dir, "debug") if args.debug else None
 
     with sync_playwright() as pw:
         try:
@@ -168,8 +191,8 @@ def run(args) -> int:
 
             tracker = NavigationTracker()
             manifest = Manifest(manifest_path, scan_dir=out_dir)
-            bar = tqdm(total=None, unit="photo", desc="Downloading")
-            this_run = {"downloaded": 0, "skipped": 0, "suspect": 0, "failed": 0}
+            bar = tqdm(total=None, unit="item", desc="Downloading")
+            metrics = TypeMetrics()
 
             try:
                 processed = 0
@@ -183,39 +206,53 @@ def run(args) -> int:
                         bar.write("Returned to an already-seen photo; stopping.")
                         break
 
+                    # Detect photo vs video, and pause any autoplaying video the
+                    # automated browser just landed on (re-armed on every item).
+                    kind = lightbox.media_type(page)
+                    lightbox.pause_videos(page)
+
                     if manifest.should_skip(
                         photo_id,
                         retry_suspect=args.retry_suspect,
                         retry_failed=args.retry_failed,
                     ):
-                        this_run["skipped"] += 1
+                        metrics.record_skip()
                     else:
                         record = downloader.download_current(
                             page,
                             out_dir=out_dir,
                             manifest=manifest,
                             dwell_s=args.dwell,
-                            timeout_ms=download_timeout_ms,
+                            event_timeout_ms=event_timeout_ms,
                             max_retries=args.max_retries,
                             suspect_max_edge=args.suspect_max_edge,
+                            media_type=kind,
+                            prefix=args.prefix,
+                            cleanup=args.cleanup,
+                            sequential=args.sequential,
+                            debug_dir=debug_dir,
                         )
                         manifest.append(record)
-                        this_run["downloaded"] += 1
-                        if record.status == STATUS_SUSPECT:
-                            this_run["suspect"] += 1
-                            bar.write(
-                                f"  suspect (looks resized): {record.filename} "
-                                f"[{record.width}x{record.height}] — raise --dwell and "
-                                "re-run with --retry-suspect"
+                        if record.status == STATUS_FAILED:
+                            metrics.record_failure(record.media_type)
+                            bar.write(f"  failed ({kind}): {photo_id} — {record.note}")
+                        else:
+                            metrics.record_success(
+                                record.media_type,
+                                seconds=record.seconds,
+                                suspect=(record.status == STATUS_SUSPECT),
                             )
-                        elif record.status == "failed":
-                            this_run["failed"] += 1
-                            bar.write(f"  failed: {photo_id} — {record.note}")
+                            if record.status == STATUS_SUSPECT:
+                                bar.write(
+                                    f"  suspect (looks resized): {record.filename} "
+                                    f"[{record.width}x{record.height}] — raise --dwell "
+                                    "and re-run with --retry-suspect"
+                                )
 
                     tracker.mark_seen(photo_id)
                     processed += 1
                     bar.update(1)
-                    bar.set_postfix(**this_run)
+                    bar.set_postfix(**metrics.postfix())
 
                     if args.limit and processed >= args.limit:
                         bar.write(f"Reached --limit of {args.limit}; stopping.")
@@ -242,15 +279,22 @@ def run(args) -> int:
                 bar.close()
                 manifest.close()
 
-            totals = manifest.counts()
             print("\n--- Summary ---", file=sys.stderr)
-            print(f"This run: {this_run}", file=sys.stderr)
-            print(f"Manifest totals (all runs): {totals}", file=sys.stderr)
+            print("This run:", file=sys.stderr)
+            for line in metrics.summary_lines():
+                print(f"  {line}", file=sys.stderr)
+            print(f"Manifest totals (all runs): {manifest.counts()}", file=sys.stderr)
             print(f"Files saved to: {out_dir}", file=sys.stderr)
-            if this_run["suspect"]:
+            if metrics.total_suspect:
                 print(
                     "Some files look like resized previews. Raise --dwell (e.g. 5) "
                     "and re-run with --retry-suspect.",
+                    file=sys.stderr,
+                )
+            if metrics.total_failed:
+                print(
+                    f"{metrics.total_failed} item(s) failed — re-run with --retry-failed "
+                    "to retry them (use --debug to capture why).",
                     file=sys.stderr,
                 )
             return 0

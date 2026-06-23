@@ -14,6 +14,20 @@ from __future__ import annotations
 
 from .urls import clean_url, is_lightbox_url
 
+# JS that finds the open item's container aria-label ("Photo - ..."/"Video - ...")
+# preferring a visible element, and reports whether a <video> is mounted.
+_MEDIA_PROBE_JS = """() => {
+  const els = document.querySelectorAll(
+    '[aria-label^="Video - "], [aria-label^="Photo - "]');
+  let label = null;
+  for (const el of els) {
+    const r = el.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) { label = el.getAttribute('aria-label'); break; }
+  }
+  if (!label && els.length) label = els[0].getAttribute('aria-label');
+  return { label, hasVideo: !!document.querySelector('video') };
+}"""
+
 # Candidate selectors for the first grid tile, most-specific first.
 _FIRST_TILE_SELECTORS = [
     'a[href*="./photo/"]',
@@ -53,6 +67,59 @@ def open_first_photo(page, *, timeout_ms: int = 30_000) -> bool:
         "Could not open the first photo automatically. Open any photo in the "
         "album manually, then re-run with --start-open."
     ) from last_err
+
+
+def media_type_from_aria(label: str | None) -> str | None:
+    """Map an item aria-label to 'photo'/'video' by its leading token.
+
+    'Video - Portrait - Jul 12, 2023, 3:04:05 PM' -> 'video'. Returns None when
+    the label is absent or unrecognised (caller falls back to other signals).
+    """
+    if not label:
+        return None
+    head = label.split(" - ", 1)[0].strip().lower()
+    if head == "video":
+        return "video"
+    if head == "photo":
+        return "photo"
+    return None
+
+
+def media_type(page) -> str:
+    """Return 'photo' or 'video' for the currently-open lightbox item.
+
+    Primary signal is the item-container aria-label's leading token (research-
+    confirmed reliable); a mounted <video> element is corroboration. Motion
+    photos are labelled 'Photo', so they are correctly counted as photos.
+    Defaults to 'photo' when nothing is conclusive.
+    """
+    try:
+        probe = page.evaluate(_MEDIA_PROBE_JS)
+    except Exception:
+        probe = None
+    if probe:
+        kind = media_type_from_aria(probe.get("label"))
+        if kind:
+            return kind
+        if probe.get("hasVideo"):
+            return "video"
+    return "photo"
+
+
+def pause_videos(page) -> int:
+    """Pause and mute every <video> currently in the DOM. Returns how many.
+
+    Google re-arms autoplay on each lightbox item, so this is called after every
+    navigation. Pausing/muting is playback-only and never affects downloading.
+    """
+    try:
+        return page.evaluate(
+            "() => { const v = document.querySelectorAll('video');"
+            " v.forEach(x => { try { x.muted = true; x.pause(); } catch (e) {} });"
+            " return v.length; }"
+        )
+    except Exception:
+        return 0
 
 
 def wait_for_url_change(page, before_clean: str, *, timeout_ms: int) -> bool:

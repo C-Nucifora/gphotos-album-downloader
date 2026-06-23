@@ -96,30 +96,45 @@ gphotos-dl "<album-url>" --out ~/Pictures/the-album --retry-failed    # redo fai
 
 | Flag | Default | Purpose |
 |------|---------|---------|
-| `--out DIR` | `./downloads` | where photos + `manifest.jsonl` go |
+| `--out DIR` | `./downloads` | where files + `manifest.jsonl` go |
 | `--profile DIR` | `./.gphotos-profile` | Chromium profile holding your login |
 | `--dwell SEC` | `2.5` | wait before each download (raise to 5+ if you get suspects) |
-| `--min-delay`/`--max-delay` | `0.8`/`2.0` | randomized gap between photos (rate-limit friendly) |
-| `--download-timeout SEC` | `120` | per-photo download timeout |
-| `--max-retries N` | `3` | attempts per photo (Shift+D, then menu fallback) |
+| `--min-delay`/`--max-delay` | `0.8`/`2.0` | randomized gap between items (rate-limit friendly) |
+| `--download-timeout SEC` | `30` | wait for a download to **start** after Shift+D (the file transfer then runs as long as needed) |
+| `--max-retries N` | `3` | attempts per item (Shift+D, then menu fallback) |
+| `--prefix STR` | `""` | prepend verbatim to every filename, e.g. `uqr-` → `uqr-IMG_1234.jpg` |
+| `--cleanup` | off | tidy names: strip unsafe chars/copy-suffixes, collapse separators |
+| `--sequential` | off | rename to zero-padded numbers in order (`0001.jpg`, `0002.mov`, …) |
 | `--suspect-max-edge PX` | `1600` | long-edge threshold for the preview heuristic |
 | `--retry-suspect` / `--retry-failed` | off | re-attempt those statuses on resume |
-| `--limit N` | `0` | stop after N photos (great for a test run) |
-| `--start-open` | off | skip auto-open; use if you've opened a photo manually |
+| `--debug` | off | on each failure, dump the live DOM (item label + control labels) to `<out>/debug` |
+| `--limit N` | `0` | stop after N items (great for a test run) |
+| `--start-open` | off | skip auto-open; use if you've opened an item manually |
 | `--assume-logged-in` | off | skip the login wait |
+
+### Photos vs videos
+
+Each item is detected as a **photo** or **video** from its lightbox aria-label.
+Videos download via the same Shift+D path (original quality, subject to Google's
+shared-album limits), are **paused + muted** the moment the tool lands on them,
+and are counted separately in the live status line (`photos:N videos:M`) and the
+final summary (which reports average download time per type). Motion/Live photos
+are treated as photos (a single combined file).
 
 ### The manifest
 
-`<out>/manifest.jsonl` — one JSON line per photo:
+`<out>/manifest.jsonl` — one JSON line per item:
 
 ```json
 {"photo_id": "AF1Qip...", "status": "ok", "filename": "IMG_1234.jpg",
- "bytes": 5242880, "width": 4032, "height": 3024, "has_exif": true,
- "attempts": 1, "ts": "2026-06-23T...Z"}
+ "media_type": "photo", "bytes": 5242880, "width": 4032, "height": 3024,
+ "has_exif": true, "attempts": 1, "seconds": 3.1, "ts": "2026-06-24T...Z"}
 ```
 
 `status` ∈ `ok` · `suspect` (looks resized) · `failed` (all attempts failed) ·
-`skipped`. It's your record of completeness and the engine for resume.
+`skipped`. Failed records carry a `note` with the captured DOM so you can see
+why; re-run with `--retry-failed` to retry them. It's your record of
+completeness and the engine for resume.
 
 ## Troubleshooting
 
