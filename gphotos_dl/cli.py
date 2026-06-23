@@ -142,6 +142,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="a photo is already open in the lightbox; skip auto-opening the first",
     )
     p.add_argument(
+        "--login",
+        action="store_true",
+        help="one-time sign-in: open Google Photos and wait while you log in, "
+        "saving the session to the profile, then exit. Required before --save-to-library.",
+    )
+    p.add_argument(
         "--assume-logged-in",
         action="store_true",
         help="skip the login wait (use when the profile is already authenticated)",
@@ -385,14 +391,22 @@ def _save_then_download_photo(
     """For one shared photo: Save it to the library, then download the library
     copy (the true original). Records under the shared photo_id for resume."""
     shared_url = share_page.url
-    library_id = saver.save_and_get_library_id(share_page)
+    library_id, clicked = saver.save_and_get_library_id(share_page)
     if not library_id:
+        if not clicked:
+            note = ("save-to-library: 'Save' control not found — are you signed in? "
+                    "Shared albums are viewable while logged out, but Saving needs "
+                    "sign-in. Run once with --login.")
+            short = "Save control not found (signed in? try --login)"
+        else:
+            note = "save-to-library: clicked Save but no new library id appeared in the response"
+            short = "clicked Save but no library id"
         manifest.append(Record(
             photo_id=photo_id, status=STATUS_FAILED, url=shared_url, media_type="photo",
-            note="save-to-library: no new library id captured after clicking Save",
+            note=note,
         ))
         metrics.record_failure("photo")
-        bar.write(f"  failed (photo): {photo_id} — Save produced no library id")
+        bar.write(f"  failed (photo): {photo_id} — {short}")
         return
     if not saver.open_library_item(lib_page, library_id):
         manifest.append(Record(
@@ -522,7 +536,15 @@ def run(args) -> int:
 
         page = browser.get_page(context)
         try:
-            browser.ensure_logged_in(page, assume_logged_in=args.assume_logged_in)
+            if args.login:
+                browser.interactive_login(page)
+                return 0
+
+            browser.ensure_logged_in(
+                page,
+                assume_logged_in=args.assume_logged_in,
+                require_login=args.save_to_library,
+            )
 
             print(f"Opening album: {args.album_url}", file=sys.stderr)
             try:

@@ -10,6 +10,7 @@ handling is the documented cause of ``Download.save_as: canceled`` failures.
 from __future__ import annotations
 
 import os
+import re
 import sys
 
 PHOTOS_HOME = "https://photos.google.com"
@@ -59,12 +60,68 @@ def _looks_signed_out(url: str) -> bool:
     return "accounts.google.com" in url or "/signin" in url or "ServiceLogin" in url
 
 
-def ensure_logged_in(page, *, assume_logged_in: bool = False) -> None:
+def _appears_signed_in(page) -> bool:
+    """Best-effort: is the Google account actually signed in on this page?
+
+    Shared albums render while logged out (and don't redirect to a sign-in URL),
+    so a URL check alone is insufficient. We look for the account control that
+    only appears when signed in, and for a visible "Sign in" affordance that
+    only appears when signed out.
+    """
+    if _looks_signed_out(page.url):
+        return False
+    try:
+        if page.locator('a[href*="SignOutOptions"], [aria-label*="Google Account" i]').count() > 0:
+            return True
+    except Exception:
+        pass
+    try:
+        for getter in (
+            lambda: page.get_by_role("link", name=re.compile(r"\bsign in\b", re.I)),
+            lambda: page.get_by_role("button", name=re.compile(r"\bsign in\b", re.I)),
+        ):
+            loc = getter().first
+            if loc.count() and loc.is_visible():
+                return False
+    except Exception:
+        pass
+    # No positive account control and no visible "Sign in": treat as uncertain ->
+    # signed out, so save-to-library prompts rather than failing silently.
+    return False
+
+
+def _wait_for_login(page) -> None:
+    print(
+        "\n>>> Please sign in to Google in the browser window that just opened.\n"
+        ">>> Once your Google Photos library (your account) is visible, return "
+        "here and press Enter to continue...",
+        file=sys.stderr,
+    )
+    try:
+        input()
+    except EOFError:
+        # Non-interactive stdin: give the user a fixed window to log in.
+        page.wait_for_timeout(60_000)
+
+
+def interactive_login(page) -> None:
+    """One-time explicit sign-in: open Photos and wait for the user to log in."""
+    page.goto(PHOTOS_HOME, wait_until="domcontentloaded")
+    try:
+        page.wait_for_timeout(1500)
+    except Exception:
+        pass
+    _wait_for_login(page)
+    print("Login saved to the profile. Re-run without --login.", file=sys.stderr)
+
+
+def ensure_logged_in(page, *, assume_logged_in: bool = False, require_login: bool = False) -> None:
     """Make sure the session is authenticated, prompting for manual login.
 
-    On a fresh profile this opens the Google sign-in page; the user logs in in
-    the visible window, then presses Enter in the terminal. On subsequent runs
-    the persisted cookies mean we sail straight through with no prompt.
+    ``require_login`` (used by save-to-library, which truly needs sign-in) uses a
+    strict signed-in check and prompts unless we can confirm an account. Without
+    it (walk/targeted on a public share) we only prompt when the URL clearly
+    shows a signed-out state, so public-share downloads never block on login.
     """
     page.goto(PHOTOS_HOME, wait_until="domcontentloaded")
     try:
@@ -75,17 +132,10 @@ def ensure_logged_in(page, *, assume_logged_in: bool = False) -> None:
     if assume_logged_in:
         return
 
-    if not _looks_signed_out(page.url):
-        return  # cookies already valid
+    if require_login:
+        if _appears_signed_in(page):
+            return
+    elif not _looks_signed_out(page.url):
+        return
 
-    print(
-        "\n>>> Please log in to Google in the browser window that just opened.\n"
-        ">>> Once your Google Photos library is visible, return here and press "
-        "Enter to continue...",
-        file=sys.stderr,
-    )
-    try:
-        input()
-    except EOFError:
-        # Non-interactive stdin: give the user a fixed window to log in.
-        page.wait_for_timeout(60_000)
+    _wait_for_login(page)

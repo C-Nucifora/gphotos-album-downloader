@@ -46,11 +46,13 @@ def click_save(page) -> bool:
     return False
 
 
-def save_and_get_library_id(share_page, *, timeout_ms: int = 10_000) -> str | None:
-    """Click Save on the open shared photo and return the new library photo id.
+def save_and_get_library_id(share_page, *, timeout_ms: int = 10_000):
+    """Click Save on the open shared photo and return ``(library_id, clicked)``.
 
-    Captures the id from the save's `batchexecute` response. Returns None if the
-    Save control wasn't found or no new id was observed.
+    ``library_id`` is the new library photo id parsed from the save's
+    `batchexecute` response, or None. ``clicked`` is whether a Save control was
+    actually found and clicked — if False, the most likely cause is not being
+    signed in (the Save control is absent when logged out).
     """
     shared_id = photo_id_from_url(share_page.url)
     new_ids: list[str] = []
@@ -66,8 +68,9 @@ def save_and_get_library_id(share_page, *, timeout_ms: int = 10_000) -> str | No
 
     share_page.on("response", on_response)
     try:
-        if not click_save(share_page):
-            return None
+        clicked = click_save(share_page)
+        if not clicked:
+            return (None, False)
         for _ in range(max(1, timeout_ms // 200)):
             if new_ids:
                 break
@@ -78,7 +81,7 @@ def save_and_get_library_id(share_page, *, timeout_ms: int = 10_000) -> str | No
         except Exception:
             pass
 
-    return new_ids[0] if new_ids else None
+    return (new_ids[0] if new_ids else None, True)
 
 
 def open_library_item(lib_page, library_id: str, *, timeout_ms: int = 15_000) -> bool:

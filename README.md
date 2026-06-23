@@ -57,7 +57,11 @@ for each photo it clicks **Save**, finds the new library item, and downloads the
 original (e.g. the real 24MB `.ARW`). Videos already come full-res from the
 share, so they download directly (use `--skip-videos` to ignore them).
 
+**You must be signed in.** Shared albums are viewable while logged out (which is
+why ordinary downloads work), but *Saving* needs a Google account. Sign in once:
+
 ```bash
+gphotos-dl "<album-url>" --login                       # opens a window; sign in, press Enter
 gphotos-dl "<album-url>" --out ~/Pictures/uqr-raws --save-to-library
 ```
 
