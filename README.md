@@ -89,8 +89,15 @@ skipped via the manifest; the run picks up where it left off. Safe to Ctrl-C.
 
 ```bash
 gphotos-dl "<album-url>" --out ~/Pictures/the-album --retry-suspect   # redo flagged previews
-gphotos-dl "<album-url>" --out ~/Pictures/the-album --retry-failed    # redo failures
+gphotos-dl "<album-url>" --out ~/Pictures/the-album --retry-failed    # redo failures (walk)
+gphotos-dl "<album-url>" --out ~/Pictures/the-album --targeted        # fast retry of failures
 ```
+
+Walk mode steps through every item (skipping done ones cheaply) and is needed to
+**discover** items — including any beyond where a run was interrupted. `--targeted`
+is the fast path for **retrying known failures**: it jumps straight to the URLs the
+manifest already recorded, with no walking, but won't find items never reached. Use
+`--targeted` to clear failures quickly, then a normal walk to finish the album.
 
 ### Useful flags
 
@@ -107,6 +114,7 @@ gphotos-dl "<album-url>" --out ~/Pictures/the-album --retry-failed    # redo fai
 | `--sequential` | off | rename to zero-padded numbers in order (`0001.jpg`, `0002.mov`, …) |
 | `--suspect-max-edge PX` | `1600` | long-edge threshold for the preview heuristic |
 | `--retry-suspect` / `--retry-failed` | off | re-attempt those statuses on resume |
+| `--targeted` | off | fast retry: jump straight to manifest-recorded failed/suspect URLs (skips the walk) |
 | `--debug` | off | on each failure, dump the live DOM (item label + control labels) to `<out>/debug` |
 | `--limit N` | `0` | stop after N items (great for a test run) |
 | `--start-open` | off | skip auto-open; use if you've opened an item manually |

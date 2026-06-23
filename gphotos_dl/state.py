@@ -122,7 +122,9 @@ class Manifest:
 
     def __init__(self, path: str, scan_dir: str | None = None):
         self.path = path
-        self._status: dict[str, str] = {}
+        # photo_id -> last-seen record info (status, filename, url, media_type).
+        # Insertion order preserves first-seen (album) order for targets().
+        self._records: dict[str, dict] = {}
         self.used_filenames: set[str] = set()
         self._fh = None
         # Seed reserved names from files already on disk so a resumed run never
@@ -158,13 +160,34 @@ class Manifest:
                 pid = rec.get("photo_id")
                 if not pid:
                     continue
-                self._status[pid] = rec.get("status", "")
+                self._records[pid] = rec
                 fn = rec.get("filename")
                 if fn:
                     self.used_filenames.add(fn)
 
     def status_of(self, photo_id: str) -> str | None:
-        return self._status.get(photo_id)
+        rec = self._records.get(photo_id)
+        return rec.get("status") if rec else None
+
+    def targets(self, *, retry_suspect: bool = False) -> list[dict]:
+        """Items to (re)download in targeted mode: failed/skipped always,
+        suspect only when ``retry_suspect``. Only those with a saved URL, in
+        first-seen (album) order. Each dict has photo_id, url, media_type.
+        """
+        wanted = {STATUS_FAILED, STATUS_SKIPPED}
+        if retry_suspect:
+            wanted.add(STATUS_SUSPECT)
+        out: list[dict] = []
+        for pid, rec in self._records.items():
+            if rec.get("status") in wanted and rec.get("url"):
+                out.append(
+                    {
+                        "photo_id": pid,
+                        "url": rec["url"],
+                        "media_type": rec.get("media_type"),
+                    }
+                )
+        return out
 
     def should_skip(
         self,
@@ -174,7 +197,7 @@ class Manifest:
         retry_failed: bool = False,
     ) -> bool:
         """Whether a previously-seen photo should be skipped on this run."""
-        status = self._status.get(photo_id)
+        status = self.status_of(photo_id)
         if status is None:
             return False
         if status == STATUS_OK:
@@ -225,13 +248,19 @@ class Manifest:
         self._fh.write(record.to_json() + "\n")
         self._fh.flush()
         os.fsync(self._fh.fileno())
-        self._status[record.photo_id] = record.status
+        self._records[record.photo_id] = {
+            "status": record.status,
+            "filename": record.filename,
+            "url": record.url,
+            "media_type": record.media_type,
+        }
         if record.filename:
             self.used_filenames.add(record.filename)
 
     def counts(self) -> dict[str, int]:
         out: dict[str, int] = {}
-        for status in self._status.values():
+        for rec in self._records.values():
+            status = rec.get("status", "")
             out[status] = out.get(status, 0) + 1
         return out
 

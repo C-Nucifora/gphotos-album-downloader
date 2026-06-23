@@ -142,6 +142,29 @@ class ManifestTests(unittest.TestCase):
         name = m.reserve("My Pic (1).JPG", photo_id="1", cleanup=True, prefix="uqr-")
         self.assertEqual(name, "uqr-My_Pic.jpg")
 
+    def test_targets_selects_failed_and_suspect(self):
+        with Manifest(self.path) as m:
+            m.append(Record(photo_id="ok1", status=STATUS_OK, url="u/ok1", filename="a.jpg"))
+            m.append(Record(photo_id="f1", status=STATUS_FAILED, url="u/f1", media_type="video"))
+            m.append(Record(photo_id="s1", status=STATUS_SUSPECT, url="u/s1"))
+            m.append(Record(photo_id="f2", status=STATUS_FAILED))  # no url -> excluded
+
+        m2 = Manifest(self.path)
+        default = m2.targets()
+        self.assertEqual([t["photo_id"] for t in default], ["f1"])
+        self.assertEqual(default[0]["url"], "u/f1")
+        self.assertEqual(default[0]["media_type"], "video")
+
+        with_suspect = m2.targets(retry_suspect=True)
+        self.assertEqual([t["photo_id"] for t in with_suspect], ["f1", "s1"])
+
+    def test_targets_preserves_album_order(self):
+        with Manifest(self.path) as m:
+            m.append(Record(photo_id="b", status=STATUS_FAILED, url="u/b"))
+            m.append(Record(photo_id="a", status=STATUS_FAILED, url="u/a"))
+        m2 = Manifest(self.path)
+        self.assertEqual([t["photo_id"] for t in m2.targets()], ["b", "a"])
+
     def test_scan_dir_seeds_used_filenames(self):
         # A file landed on disk but its record was never appended (crash window).
         with open(os.path.join(self.tmp.name, "orphan.jpg"), "w") as fh:
