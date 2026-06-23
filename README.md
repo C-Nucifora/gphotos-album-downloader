@@ -82,6 +82,26 @@ gphotos-dl "<album-url>" --out ~/Pictures/uqr-raws --save-to-library
 > mode; until then, saved copies remain in your library and you should
 > bulk-delete them yourself.)*
 
+### Recommended: run photos and videos as two batches
+
+Photos and videos need different handling, so run them as separate passes into
+the **same** folder — the manifest tracks each item, so the batches don't clash
+and either can be resumed independently:
+
+```bash
+# 1) Videos — direct from the share (already full-res), photos skipped:
+gphotos-dl "<album-url>" --out ~/Pictures/uqr-gphotos-test-2 --skip-photos
+
+# 2) Photos — true RAW originals via Save-to-library, videos skipped:
+gphotos-dl "<album-url>" --login                       # one-time sign-in
+gphotos-dl "<album-url>" --out ~/Pictures/uqr-gphotos-test-2 --save-to-library --skip-videos
+```
+
+Either pass is resumable: re-running skips items already recorded, and a failed
+item can be retried with `--retry-failed` (or `--targeted` for a fast retry of
+the recorded failures). A single bad item is logged and skipped rather than
+aborting the whole run.
+
 ---
 
 ## Install

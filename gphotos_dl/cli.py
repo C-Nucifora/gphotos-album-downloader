@@ -199,6 +199,18 @@ def _type_skipped(kind, args) -> bool:
     return (kind == "video" and args.skip_videos) or (kind == "photo" and args.skip_photos)
 
 
+def _record_unexpected(manifest, metrics, bar, photo_id, url, exc):
+    """Isolate a per-item failure so one bad item never kills a long run."""
+    try:
+        manifest.append(
+            Record(photo_id=photo_id, status=STATUS_FAILED, url=url, note=f"unexpected error: {exc}")
+        )
+    except Exception:
+        pass
+    metrics.record_failure(None)
+    bar.write(f"  error: {photo_id} — {exc}")
+
+
 def _process_download(
     page,
     *,
@@ -266,33 +278,37 @@ def _run_walk(page, args, out_dir, manifest, metrics, tqdm, event_timeout_ms, na
                 bar.write("Returned to an already-seen photo; stopping.")
                 break
 
-            skip = manifest.should_skip(
-                photo_id,
-                retry_suspect=args.retry_suspect,
-                retry_failed=args.retry_failed,
-            )
-            if skip:
-                # Already done: walk past it — no media probe, no pause, no dwell,
-                # and (below) no inter-item delay.
-                metrics.record_skip()
-            else:
-                kind = lightbox.media_type(page)
-                if _type_skipped(kind, args):
-                    skip = True  # treat as a cheap skip (no download, no delay)
+            skip = False
+            try:
+                skip = manifest.should_skip(
+                    photo_id,
+                    retry_suspect=args.retry_suspect,
+                    retry_failed=args.retry_failed,
+                )
+                if skip:
+                    # Already done: walk past it — no media probe, no pause, no
+                    # dwell, and (below) no inter-item delay.
                     metrics.record_skip()
                 else:
-                    _process_download(
-                        page,
-                        photo_id=photo_id,
-                        args=args,
-                        out_dir=out_dir,
-                        manifest=manifest,
-                        event_timeout_ms=event_timeout_ms,
-                        debug_dir=debug_dir,
-                        metrics=metrics,
-                        bar=bar,
-                        kind=kind,
-                    )
+                    kind = lightbox.media_type(page)
+                    if _type_skipped(kind, args):
+                        skip = True  # treat as a cheap skip (no download, no delay)
+                        metrics.record_skip()
+                    else:
+                        _process_download(
+                            page,
+                            photo_id=photo_id,
+                            args=args,
+                            out_dir=out_dir,
+                            manifest=manifest,
+                            event_timeout_ms=event_timeout_ms,
+                            debug_dir=debug_dir,
+                            metrics=metrics,
+                            bar=bar,
+                            kind=kind,
+                        )
+            except Exception as exc:
+                _record_unexpected(manifest, metrics, bar, photo_id, page.url, exc)
 
             tracker.mark_seen(photo_id)
             processed += 1
@@ -361,22 +377,25 @@ def _run_targeted(page, args, out_dir, manifest, metrics, tqdm, event_timeout_ms
                 bar.set_postfix(**metrics.postfix())
                 continue
 
-            kind = lightbox.media_type(page) or (target.get("media_type") or "photo")
-            if _type_skipped(kind, args):
-                metrics.record_skip()
-            else:
-                _process_download(
-                    page,
-                    photo_id=pid,
-                    args=args,
-                    out_dir=out_dir,
-                    manifest=manifest,
-                    event_timeout_ms=event_timeout_ms,
-                    debug_dir=debug_dir,
-                    metrics=metrics,
-                    bar=bar,
-                    kind=kind,
-                )
+            try:
+                kind = lightbox.media_type(page) or (target.get("media_type") or "photo")
+                if _type_skipped(kind, args):
+                    metrics.record_skip()
+                else:
+                    _process_download(
+                        page,
+                        photo_id=pid,
+                        args=args,
+                        out_dir=out_dir,
+                        manifest=manifest,
+                        event_timeout_ms=event_timeout_ms,
+                        debug_dir=debug_dir,
+                        metrics=metrics,
+                        bar=bar,
+                        kind=kind,
+                    )
+            except Exception as exc:
+                _record_unexpected(manifest, metrics, bar, pid, page.url, exc)
             bar.update(1)
             bar.set_postfix(**metrics.postfix())
             time.sleep(random.uniform(args.min_delay, args.max_delay))
@@ -443,30 +462,34 @@ def _run_save_mode(share_page, context, args, out_dir, manifest, metrics, tqdm,
                 bar.write("Returned to an already-seen item; stopping.")
                 break
 
-            skip = manifest.should_skip(
-                photo_id, retry_suspect=args.retry_suspect, retry_failed=args.retry_failed,
-            )
-            if skip:
-                metrics.record_skip()
-            else:
-                kind = lightbox.media_type(share_page)
-                lightbox.pause_videos(share_page)
-                if _type_skipped(kind, args):
-                    skip = True
+            skip = False
+            try:
+                skip = manifest.should_skip(
+                    photo_id, retry_suspect=args.retry_suspect, retry_failed=args.retry_failed,
+                )
+                if skip:
                     metrics.record_skip()
-                elif kind == "video":
-                    # Videos already come full-res from the share — download directly.
-                    _process_download(
-                        share_page, photo_id=photo_id, args=args, out_dir=out_dir,
-                        manifest=manifest, event_timeout_ms=event_timeout_ms,
-                        debug_dir=debug_dir, metrics=metrics, bar=bar, kind="video",
-                    )
                 else:
-                    _save_then_download_photo(
-                        share_page, lib_page, photo_id=photo_id, args=args, out_dir=out_dir,
-                        manifest=manifest, event_timeout_ms=event_timeout_ms,
-                        debug_dir=debug_dir, metrics=metrics, bar=bar,
-                    )
+                    kind = lightbox.media_type(share_page)
+                    lightbox.pause_videos(share_page)
+                    if _type_skipped(kind, args):
+                        skip = True
+                        metrics.record_skip()
+                    elif kind == "video":
+                        # Videos already come full-res from the share — download directly.
+                        _process_download(
+                            share_page, photo_id=photo_id, args=args, out_dir=out_dir,
+                            manifest=manifest, event_timeout_ms=event_timeout_ms,
+                            debug_dir=debug_dir, metrics=metrics, bar=bar, kind="video",
+                        )
+                    else:
+                        _save_then_download_photo(
+                            share_page, lib_page, photo_id=photo_id, args=args, out_dir=out_dir,
+                            manifest=manifest, event_timeout_ms=event_timeout_ms,
+                            debug_dir=debug_dir, metrics=metrics, bar=bar,
+                        )
+            except Exception as exc:
+                _record_unexpected(manifest, metrics, bar, photo_id, share_page.url, exc)
 
             tracker.mark_seen(photo_id)
             processed += 1
