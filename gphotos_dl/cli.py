@@ -286,7 +286,119 @@ def run_api(args) -> int:
             file=sys.stderr,
         )
     if args.api_probe:
-        print("\n(--api-probe: enumeration only. Full API download is next.)", file=sys.stderr)
+        print("\n(--api-probe: enumeration only.)", file=sys.stderr)
+        return 0
+    return _run_api_download(args, client, album_key, auth_key, items)
+
+
+def _process_api_batch(client, batch, album_key, auth_key, out_dir, manifest, metrics, bar, args):
+    """Save a batch of shared items, resolve the owned copies, download the
+    originals, record them, and (optionally) move the saved copies to Trash."""
+    from . import gpwc_api
+
+    shared_keys = [it.media_key for it in batch]
+    dedups = [it.dedup_key for it in batch]
+    try:
+        gpwc_api.save_shared_to_library(client, album_key, shared_keys, auth_key)
+    except Exception as exc:
+        for it in batch:
+            kind = gpwc_api.item_kind(it)
+            manifest.append(Record(photo_id=it.dedup_key, status=STATUS_FAILED,
+                                   media_type=kind, note=f"save failed: {exc}"))
+            metrics.record_failure(kind)
+            bar.update(1)
+        bar.set_postfix(**metrics.postfix())
+        return
+
+    owned = gpwc_api.resolve_owned_by_dedup(client, dedups)
+    trashed = []
+    for it in batch:
+        kind = gpwc_api.item_kind(it)
+        dk = it.dedup_key
+        owned_key = owned.get(dk)
+        if not owned_key:
+            manifest.append(Record(photo_id=dk, status=STATUS_FAILED, media_type=kind,
+                                   note="could not resolve saved library copy"))
+            metrics.record_failure(kind)
+            bar.update(1)
+            bar.set_postfix(**metrics.postfix())
+            continue
+        try:
+            t0 = time.monotonic()
+            content, suggested = gpwc_api.fetch_original(client, owned_key)
+            filename = manifest.reserve(
+                suggested or f"{dk}.jpg", photo_id=dk, prefix=args.prefix,
+                cleanup=args.cleanup, sequential=args.sequential,
+                default_ext=(".mp4" if kind == "video" else ".jpg"),
+            )
+            with open(os.path.join(out_dir, filename), "wb") as fh:
+                fh.write(content)
+            manifest.append(Record(photo_id=dk, status=STATUS_OK, filename=filename,
+                                   media_type=kind, bytes=len(content),
+                                   seconds=round(time.monotonic() - t0, 2)))
+            metrics.record_success(kind, seconds=round(time.monotonic() - t0, 2))
+            trashed.append(dk)
+        except Exception as exc:
+            manifest.append(Record(photo_id=dk, status=STATUS_FAILED, media_type=kind,
+                                   note=f"download failed: {exc}"))
+            metrics.record_failure(kind)
+        bar.update(1)
+        bar.set_postfix(**metrics.postfix())
+
+    if args.empty_trash and trashed:
+        try:
+            gpwc_api.move_to_trash(client, trashed)
+        except Exception as exc:
+            bar.write(f"  move-to-trash failed: {exc}")
+
+
+def _run_api_download(args, client, album_key, auth_key, items) -> int:
+    """Full API pipeline: per batch, save→resolve→download→(trash). Resumable
+    via the JSONL manifest (keyed by dedup_key)."""
+    from . import gpwc_api
+
+    out_dir = os.path.abspath(args.out)
+    os.makedirs(out_dir, exist_ok=True)
+    manifest = Manifest(os.path.join(out_dir, "manifest.jsonl"), scan_dir=out_dir)
+    metrics = TypeMetrics()
+    tqdm = _load_tqdm()
+    bar = tqdm(total=len(items), unit="item", desc="API download")
+    batch_size = max(1, args.batch_size)
+    batch = []
+    try:
+        for item in items:
+            dk = getattr(item, "dedup_key", None)
+            kind = gpwc_api.item_kind(item)
+            if not dk:
+                metrics.record_failure(kind)
+                bar.update(1)
+                continue
+            if manifest.should_skip(dk, retry_suspect=args.retry_suspect, retry_failed=args.retry_failed):
+                metrics.record_skip()
+                bar.update(1)
+                bar.set_postfix(**metrics.postfix())
+                continue
+            if _type_skipped(kind, args):
+                metrics.record_filtered()
+                bar.update(1)
+                bar.set_postfix(**metrics.postfix())
+                continue
+            batch.append(item)
+            if len(batch) >= batch_size:
+                _process_api_batch(client, batch, album_key, auth_key, out_dir, manifest, metrics, bar, args)
+                batch = []
+        if batch:
+            _process_api_batch(client, batch, album_key, auth_key, out_dir, manifest, metrics, bar, args)
+    finally:
+        bar.close()
+        manifest.close()
+
+    print("\n--- Summary (API) ---", file=sys.stderr)
+    for line in metrics.summary_lines():
+        print(f"  {line}", file=sys.stderr)
+    print(f"Files saved to: {out_dir}", file=sys.stderr)
+    if metrics.total_failed:
+        print(f"{metrics.total_failed} failed — re-run to retry (resumes via manifest).", file=sys.stderr)
     return 0
 
 

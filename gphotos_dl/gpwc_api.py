@@ -74,3 +74,69 @@ def enumerate_album(client, album_media_key: str, auth_key: str | None, *, limit
         page_id = getattr(resp.data, "next_page_id", None)
         if not page_id:
             return items
+
+
+def save_shared_to_library(client, album_media_key: str, shared_media_keys: list[str], auth_key: str):
+    """Batch-save shared items into the user's own library (so originals become
+    retrievable). Returns the raw API response."""
+    from gpwc import payloads
+
+    return payloads.SaveSharedMediaToLibrary(
+        album_media_key=album_media_key,
+        item_media_keys=list(shared_media_keys),
+        auth_key=auth_key,
+    ).execute(client)
+
+
+def resolve_owned_by_dedup(client, wanted_dedups, *, max_pages: int = 10) -> dict:
+    """Map each wanted dedup_key -> the owned library media_key, by scanning the
+    most-recently-uploaded library items (saved items appear at the top)."""
+    from gpwc import payloads
+
+    wanted = set(d for d in wanted_dedups if d)
+    found: dict[str, str] = {}
+    page_id = None
+    for _ in range(max_pages):
+        if not wanted - set(found):
+            break
+        resp = payloads.GetLibraryPageByUploadedDate(page_id).execute(client)
+        for item in getattr(resp.data, "items", None) or []:
+            dk = getattr(item, "dedup_key", None)
+            if dk in wanted and dk not in found:
+                found[dk] = getattr(item, "media_key", None)
+        page_id = getattr(resp.data, "next_page_id", None)
+        if not page_id:
+            break
+    return found
+
+
+def _name_from_content_disposition(value: str) -> str | None:
+    import re
+    from urllib.parse import unquote
+
+    if not value:
+        return None
+    m = re.search(r"filename\*?=(?:UTF-8'')?\"?([^\";]+)\"?", value)
+    return unquote(m.group(1)) if m else None
+
+
+def fetch_original(client, owned_media_key: str):
+    """Resolve the owned item's original-download URL and fetch the bytes.
+    Returns (content_bytes, suggested_filename)."""
+    from gpwc import payloads
+
+    info = payloads.GetItemInfo(owned_media_key).execute(client).data
+    url = getattr(info, "download_original_url", None) or getattr(info, "download_url", None)
+    if not url:
+        raise RuntimeError("item has no download_original_url")
+    resp = client.session.get(url)
+    resp.raise_for_status()
+    name = _name_from_content_disposition(resp.headers.get("content-disposition", ""))
+    return resp.content, name
+
+
+def move_to_trash(client, dedup_keys: list[str]):
+    """Move the user's own copies (by dedup_key) to Trash."""
+    from gpwc import payloads
+
+    payloads.MoveToTrash(list(dedup_keys)).execute(client)
