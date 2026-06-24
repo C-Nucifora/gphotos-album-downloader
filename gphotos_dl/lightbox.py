@@ -14,19 +14,45 @@ from __future__ import annotations
 
 from .urls import clean_url, is_lightbox_url
 
-# JS that finds the open item's container aria-label ("Photo - ..."/"Video - ...")
-# preferring a visible element, and reports whether a <video> is mounted.
-_MEDIA_PROBE_JS = """() => {
-  const els = document.querySelectorAll(
+# JS that identifies the CURRENTLY-OPEN item and video-ness via several signals.
+# Critically it takes the LARGEST aria-labelled element (the main item fills the
+# viewport) rather than the first visible one — the lightbox filmstrip is full of
+# small thumbnails whose "Photo -"/"Video -" labels otherwise get mistaken for the
+# open item, which made videos misclassify as photos. It also reports a mounted
+# <video> and the presence of a visible video-player control (play/pause/mute),
+# which photos never have.
+_MEDIA_PROBE_JS = r"""() => {
+  const labeled = document.querySelectorAll(
     '[aria-label^="Video - "], [aria-label^="Photo - "]');
-  let label = null;
-  for (const el of els) {
+  let label = null, bestArea = 0;
+  for (const el of labeled) {
     const r = el.getBoundingClientRect();
-    if (r.width > 0 && r.height > 0) { label = el.getAttribute('aria-label'); break; }
+    const area = r.width * r.height;
+    if (area > bestArea) { bestArea = area; label = el.getAttribute('aria-label'); }
   }
-  if (!label && els.length) label = els[0].getAttribute('aria-label');
-  return { label, hasVideo: !!document.querySelector('video') };
+  let hasVideoControl = false;
+  for (const e of document.querySelectorAll('[aria-label]')) {
+    const a = e.getAttribute('aria-label') || '';
+    if (/(^|\W)(unmute|mute|play|pause)(\W|$)/i.test(a)) {
+      const r = e.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) { hasVideoControl = true; break; }
+    }
+  }
+  return {
+    label: label,
+    area: Math.round(bestArea),
+    hasVideo: !!document.querySelector('video'),
+    hasVideoControl: hasVideoControl,
+  };
 }"""
+
+
+def probe_signals(page):
+    """Return the raw media-detection signals dict (for diagnostics), or None."""
+    try:
+        return page.evaluate(_MEDIA_PROBE_JS)
+    except Exception:
+        return None
 
 # Candidate selectors for the first grid tile, most-specific first.
 _FIRST_TILE_SELECTORS = [
@@ -107,12 +133,9 @@ def media_type(page, *, settle_ms: int = 2500) -> str:
     """
     steps = max(1, settle_ms // 200)
     for _ in range(steps):
-        try:
-            probe = page.evaluate(_MEDIA_PROBE_JS)
-        except Exception:
-            probe = None
+        probe = probe_signals(page)
         if probe:
-            if probe.get("hasVideo"):
+            if probe.get("hasVideo") or probe.get("hasVideoControl"):
                 return "video"
             if media_type_from_aria(probe.get("label")) == "video":
                 return "video"

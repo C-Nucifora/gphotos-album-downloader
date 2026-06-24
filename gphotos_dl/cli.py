@@ -211,6 +211,20 @@ def _type_skipped(kind, args) -> bool:
     return (kind == "video" and args.skip_videos) or (kind == "photo" and args.skip_photos)
 
 
+def _log_media_probe(debug_dir, page, photo_id, kind):
+    """With --debug, append the media-detection signals + decision per item, so a
+    misclassified video can be diagnosed from real data."""
+    if not debug_dir:
+        return
+    try:
+        signals = lightbox.probe_signals(page) or {}
+        os.makedirs(debug_dir, exist_ok=True)
+        with open(os.path.join(debug_dir, "media-probe.jsonl"), "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"photo_id": photo_id, "decided": kind, **signals}) + "\n")
+    except Exception:
+        pass
+
+
 def _record_unexpected(manifest, metrics, bar, photo_id, url, exc):
     """Isolate a per-item failure so one bad item never kills a long run."""
     try:
@@ -303,6 +317,7 @@ def _run_walk(page, args, out_dir, manifest, metrics, tqdm, event_timeout_ms, na
                     metrics.record_skip()
                 else:
                     kind = lightbox.media_type(page)
+                    _log_media_probe(debug_dir, page, photo_id, kind)
                     if _type_skipped(kind, args):
                         skip = True  # treat as a cheap skip (no download, no delay)
                         metrics.record_skip()
@@ -519,6 +534,7 @@ def _run_save_mode(share_page, context, args, out_dir, manifest, metrics, tqdm,
                     metrics.record_skip()
                 else:
                     kind = lightbox.media_type(share_page)
+                    _log_media_probe(debug_dir, share_page, photo_id, kind)
                     lightbox.pause_videos(share_page)
                     if _type_skipped(kind, args):
                         skip = True
