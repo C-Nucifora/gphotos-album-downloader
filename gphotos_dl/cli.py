@@ -310,7 +310,13 @@ def _process_api_batch(client, batch, album_key, auth_key, out_dir, manifest, me
         bar.set_postfix(**metrics.postfix())
         return
 
-    owned = gpwc_api.resolve_owned_by_dedup(client, dedups)
+    # Saved copies can take a moment to index into the library; wait + retry.
+    owned = {}
+    for _ in range(5):
+        time.sleep(2)
+        owned = gpwc_api.resolve_owned_by_dedup(client, dedups)
+        if len(owned) >= len(dedups):
+            break
     trashed = []
     for it in batch:
         kind = gpwc_api.item_kind(it)
