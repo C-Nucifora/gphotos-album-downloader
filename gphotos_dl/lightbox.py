@@ -93,20 +93,20 @@ def has_video(page) -> bool:
         return False
 
 
-def media_type(page, *, settle_ms: int = 2000) -> str:
+def media_type(page, *, settle_ms: int = 2500) -> str:
     """Return 'photo' or 'video' for the currently-open lightbox item.
 
-    Detection is *polled* because reading immediately after navigation is
-    unreliable — the DOM (and the autoplaying <video>) lags the URL change, so a
-    single early read misclassifies videos as photos. We return 'video' the
-    moment a strong signal appears (a mounted <video>, or a 'Video -' aria-label),
-    conclude 'photo' early once a 'Photo -' label is seen with no video, and
-    otherwise wait out the settle window before defaulting to 'photo'. Motion
-    photos are labelled 'Photo' and correctly counted as photos.
+    Reading immediately after navigation is unreliable: the new item's
+    aria-label / autoplaying <video> lags the URL change, and a *stale* "Photo -"
+    label from the previous item can still be in the DOM — which previously made
+    videos download as photos. So we never conclude 'photo' early: we poll the
+    whole settle window and return 'video' the moment a 'Video -' label or a
+    mounted <video> appears; only if no video signal shows up across the entire
+    window do we treat it as a photo. Motion photos are labelled 'Photo' and so
+    are correctly counted as photos.
     """
     steps = max(1, settle_ms // 200)
-    saw_photo_label = False
-    for i in range(steps):
+    for _ in range(steps):
         try:
             probe = page.evaluate(_MEDIA_PROBE_JS)
         except Exception:
@@ -114,15 +114,8 @@ def media_type(page, *, settle_ms: int = 2000) -> str:
         if probe:
             if probe.get("hasVideo"):
                 return "video"
-            token = media_type_from_aria(probe.get("label"))
-            if token == "video":
+            if media_type_from_aria(probe.get("label")) == "video":
                 return "video"
-            if token == "photo":
-                saw_photo_label = True
-        # A 'Photo' label with no <video> after a couple of checks is conclusive
-        # (videos autoplay their <video> within a few hundred ms).
-        if saw_photo_label and i >= 2:
-            return "photo"
         page.wait_for_timeout(200)
     return "photo"
 

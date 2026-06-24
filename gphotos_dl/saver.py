@@ -33,16 +33,23 @@ _SAVE_GETTERS = [
 ]
 
 
-def click_save(page) -> bool:
-    """Click the Save-to-library control; return whether something was clicked."""
-    for getter in _SAVE_GETTERS:
-        try:
-            loc = getter(page).first
-            if loc.count() and loc.is_visible():
-                loc.click(timeout=3_000)
-                return True
-        except Exception:
-            continue
+def click_save(page, *, timeout_ms: int = 6_000) -> bool:
+    """Click the Save-to-library control; return whether something was clicked.
+
+    Polls for up to ``timeout_ms`` because the lightbox toolbar isn't rendered
+    immediately after opening/navigating (this is why the very first item used to
+    fail with 'Save control not found' even though the control was present).
+    """
+    for _ in range(max(1, timeout_ms // 300)):
+        for getter in _SAVE_GETTERS:
+            try:
+                loc = getter(page).first
+                if loc.count() and loc.is_visible():
+                    loc.click(timeout=3_000)
+                    return True
+            except Exception:
+                continue
+        page.wait_for_timeout(300)
     return False
 
 
