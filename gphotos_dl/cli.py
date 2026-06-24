@@ -169,8 +169,78 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="run without a visible window (NOT recommended; downloads are flakier)",
     )
+    # --- Experimental API backend (gpwc), no browser ---
+    p.add_argument(
+        "--api",
+        action="store_true",
+        help="EXPERIMENTAL: use the internal web API backend (gpwc) instead of "
+        "the browser. Needs --cookies. Far more robust (no UI automation).",
+    )
+    p.add_argument(
+        "--api-probe",
+        action="store_true",
+        help="API backend: enumerate the shared album via the API and print a "
+        "summary (counts, types, sample), then exit. Validates auth + mapping.",
+    )
+    p.add_argument(
+        "--cookies",
+        help="path to cookies.txt exported from a logged-in Google session "
+        "(required for --api / --api-probe)",
+    )
+    p.add_argument(
+        "--account-index",
+        type=int,
+        default=0,
+        help="Google account index N from photos.google.com/u/N/ (API backend)",
+    )
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return p
+
+
+def run_api(args) -> int:
+    """API backend (gpwc). Currently implements --api-probe (enumerate + report);
+    the full save/download/trash flow builds on a validated enumeration."""
+    from . import gpwc_api
+
+    if not args.cookies:
+        print("Error: --cookies <cookies.txt> is required for the API backend.", file=sys.stderr)
+        return 2
+    album_key, auth_key = gpwc_api.parse_share_url(args.album_url)
+    if not album_key:
+        print("Error: could not find a /share/<token> album key in the URL.", file=sys.stderr)
+        return 2
+    try:
+        client = gpwc_api.build_client(args.cookies, args.account_index)
+    except RuntimeError as exc:
+        print(f"\nError: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Album key: {album_key}", file=sys.stderr)
+    print(f"Auth key: {'present' if auth_key else 'MISSING'}", file=sys.stderr)
+    try:
+        items = gpwc_api.enumerate_album(client, album_key, auth_key, limit=args.limit or 0)
+    except Exception as exc:
+        print(f"\nError enumerating album via API: {exc}", file=sys.stderr)
+        return 1
+
+    photos = sum(1 for i in items if gpwc_api.item_kind(i) == "photo")
+    videos = len(items) - photos
+    owned = sum(1 for i in items if getattr(i, "is_owned", False))
+    print(
+        f"\nEnumerated {len(items)} items: {photos} photos, {videos} videos, "
+        f"{owned} already owned",
+        file=sys.stderr,
+    )
+    for i in items[:5]:
+        print(
+            f"  {str(getattr(i, 'media_key', '?'))[:24]}…  {gpwc_api.item_kind(i)}  "
+            f"{getattr(i, 'res_width', '?')}x{getattr(i, 'res_height', '?')}  "
+            f"owned={getattr(i, 'is_owned', '?')}  dedup={str(getattr(i, 'dedup_key', '?'))[:16]}",
+            file=sys.stderr,
+        )
+    if args.api_probe:
+        print("\n(--api-probe: enumeration only. Full API download is next.)", file=sys.stderr)
+    return 0
 
 
 def _load_tqdm():
@@ -712,6 +782,12 @@ def run(args) -> int:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    if args.api or args.api_probe:
+        try:
+            return run_api(args)
+        except KeyboardInterrupt:
+            print("\nInterrupted.", file=sys.stderr)
+            return 130
     try:
         return run(args)
     except KeyboardInterrupt:
