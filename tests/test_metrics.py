@@ -31,6 +31,18 @@ class TypeMetricsTests(unittest.TestCase):
         self.assertIn("photo: 2 saved", lines)
         self.assertIn("avg 3.0s/item", lines)
 
+    def test_filtered_separate_from_skipped(self):
+        m = TypeMetrics()
+        m.record_skip()       # already done
+        m.record_filtered()   # excluded by --skip-videos
+        m.record_filtered()
+        pf = m.postfix()
+        self.assertEqual(pf.get("skipped"), 1)
+        self.assertEqual(pf.get("filtered"), 2)
+        summary = "\n".join(m.summary_lines())
+        self.assertIn("skipped (already done): 1", summary)
+        self.assertIn("filtered out", summary)
+
     def test_empty_postfix(self):
         self.assertEqual(TypeMetrics().postfix(), {})
 

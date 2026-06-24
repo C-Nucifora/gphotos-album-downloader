@@ -14,7 +14,8 @@ class TypeMetrics:
 
     def __init__(self) -> None:
         self._d: dict[str, dict[str, float]] = {}
-        self.skipped = 0
+        self.skipped = 0   # already done (in manifest)
+        self.filtered = 0  # excluded by --skip-videos / --skip-photos
 
     def _bucket(self, media_type: str | None) -> dict[str, float]:
         key = media_type or "photo"
@@ -36,6 +37,9 @@ class TypeMetrics:
 
     def record_skip(self) -> None:
         self.skipped += 1
+
+    def record_filtered(self) -> None:
+        self.filtered += 1
 
     @property
     def total_failed(self) -> int:
@@ -59,6 +63,8 @@ class TypeMetrics:
             out["failed"] = self.total_failed
         if self.skipped:
             out["skipped"] = self.skipped
+        if self.filtered:
+            out["filtered"] = self.filtered
         return out
 
     def summary_lines(self) -> list[str]:
@@ -75,4 +81,6 @@ class TypeMetrics:
             )
         if self.skipped:
             lines.append(f"skipped (already done): {self.skipped}")
+        if self.filtered:
+            lines.append(f"filtered out (--skip-videos/--skip-photos): {self.filtered}")
         return lines

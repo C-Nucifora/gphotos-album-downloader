@@ -320,7 +320,7 @@ def _run_walk(page, args, out_dir, manifest, metrics, tqdm, event_timeout_ms, na
                     _log_media_probe(debug_dir, page, photo_id, kind)
                     if _type_skipped(kind, args):
                         skip = True  # treat as a cheap skip (no download, no delay)
-                        metrics.record_skip()
+                        metrics.record_filtered()
                     else:
                         _process_download(
                             page,
@@ -407,7 +407,7 @@ def _run_targeted(page, args, out_dir, manifest, metrics, tqdm, event_timeout_ms
             try:
                 kind = lightbox.media_type(page) or (target.get("media_type") or "photo")
                 if _type_skipped(kind, args):
-                    metrics.record_skip()
+                    metrics.record_filtered()
                 else:
                     _process_download(
                         page,
@@ -440,7 +440,7 @@ def _save_then_download_photo(
     # present, this was misclassified — route it correctly instead.
     if lightbox.has_video(share_page):
         if args.skip_videos:
-            metrics.record_skip()
+            metrics.record_filtered()
             bar.write(f"  skipped (video detected): {photo_id}")
         else:
             _process_download(
@@ -538,7 +538,7 @@ def _run_save_mode(share_page, context, args, out_dir, manifest, metrics, tqdm,
                     lightbox.pause_videos(share_page)
                     if _type_skipped(kind, args):
                         skip = True
-                        metrics.record_skip()
+                        metrics.record_filtered()
                     elif kind == "video":
                         # Videos already come full-res from the share — download directly.
                         _process_download(
