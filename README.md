@@ -12,9 +12,48 @@ It exists because the two obvious routes fail:
   compresses RAW, transcodes video, and **strips EXIF/GPS** for media you didn't
   upload — so it can't reproduce faithful originals.
 
-This tool instead does what *you* would do by hand, just automated and resumable:
-open each photo in the lightbox and press **Shift+D** (the "download this
-original" shortcut). It **does not add anything to your own library**.
+## Two backends
+
+- **`--api` (recommended)** — drives Google Photos' internal web API via
+  [gpwc](https://github.com/xob0t/google_photos_web_client): enumerate the
+  album, batch-save shared photos to your library, download the true originals
+  (incl. RAW), and clean up — all API calls, **no browser at runtime**. Fast and
+  robust (no UI selectors/timing). See **[API backend](#api-backend-recommended)**.
+- **Browser/Playwright (backup)** — the original path that drives the web UI
+  (`--save-to-library`, walk/`--targeted`). Kept as a fallback; it's slower and
+  more fragile (depends on undocumented UI). Use it if the API path breaks.
+
+> Getting the true original from a **shared album you don't own** fundamentally
+> requires saving each item into your own library first (Google serves
+> non-owners a recompressed copy) — both backends do this; the API just does it
+> far more efficiently.
+
+---
+
+## API backend (recommended)
+
+Needs gpwc and a `cookies.txt` from a logged-in session:
+
+```bash
+pip install 'git+https://github.com/xob0t/google_photos_web_client'
+
+# 1) Get cookies — reuse your saved Playwright profile (or the browser extension):
+gphotos-dl "<share-url>" --export-cookies ~/Downloads/cookies.txt
+
+# 2) Validate (enumerate the album, no downloads):
+gphotos-dl "<share-url>" --api-probe --cookies ~/Downloads/cookies.txt
+
+# 3) Download originals (photos), with storage-managed cleanup:
+gphotos-dl "<share-url>" --out ~/Pictures/album --api --cookies ~/Downloads/cookies.txt \
+    --skip-videos --empty-trash --batch-size 25
+```
+
+The API run enumerates every item (media type from the API, so `--skip-videos`
+is exact), batch-saves photos via `SaveSharedMediaToLibrary`, resolves the saved
+copies by `dedup_key`, downloads each original, records to the resumable
+`manifest.jsonl` (keyed by `dedup_key`), and — with `--empty-trash` — moves the
+saved copies to Trash per batch. Re-run to resume; failures retry. If a run hits
+an auth error, the session cookies expired — re-run `--export-cookies`.
 
 ---
 
@@ -44,7 +83,12 @@ the official API** for faithful originals.
 
 ---
 
-## Getting full-resolution / RAW originals (`--save-to-library`)
+## Getting full-resolution / RAW originals — browser backup (`--save-to-library`)
+
+> **Prefer the [API backend](#api-backend-recommended) above.** This browser path
+> does the same thing via the UI and is kept as a fallback; it's slower and more
+> fragile.
+
 
 For a **shared album you don't own**, Google serves the normal download as a
 **recompressed JPEG derivative** — e.g. a 24MP Sony `.ARW` comes back as a
