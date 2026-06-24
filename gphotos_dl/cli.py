@@ -193,8 +193,45 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help="Google account index N from photos.google.com/u/N/ (API backend)",
     )
+    p.add_argument(
+        "--export-cookies",
+        metavar="PATH",
+        help="launch your saved Playwright profile (--profile) and write its "
+        "Google cookies to PATH (Netscape cookies.txt) for use with --api, then exit",
+    )
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return p
+
+
+def run_export_cookies(args) -> int:
+    """Reuse the authenticated Playwright profile to write a cookies.txt for gpwc."""
+    from playwright.sync_api import sync_playwright
+
+    profile_dir = os.path.abspath(args.profile)
+    out = os.path.expanduser(args.export_cookies)
+    with sync_playwright() as pw:
+        try:
+            context = browser.launch_context(pw, profile_dir=profile_dir, headless=True)
+        except browser.ProfileLockedError as exc:
+            print(f"\nError: {exc}", file=sys.stderr)
+            return 2
+        try:
+            page = browser.get_page(context)
+            try:
+                page.goto(browser.PHOTOS_HOME, wait_until="domcontentloaded")
+                page.wait_for_timeout(1500)
+            except Exception:
+                pass
+            count = browser.export_cookies_txt(context, out)
+        finally:
+            context.close()
+
+    if count == 0:
+        print(f"No cookies found in the profile {profile_dir!r}. Run --login first.", file=sys.stderr)
+        return 1
+    print(f"Wrote {count} cookies to {out}", file=sys.stderr)
+    print(f'Now run:  gphotos-dl "<share-url>" --api-probe --cookies {out}', file=sys.stderr)
+    return 0
 
 
 def run_api(args) -> int:
@@ -205,14 +242,24 @@ def run_api(args) -> int:
     if not args.cookies:
         print("Error: --cookies <cookies.txt> is required for the API backend.", file=sys.stderr)
         return 2
+    cookies_path = os.path.expanduser(args.cookies)
+    if not os.path.exists(cookies_path):
+        print(
+            f"Error: cookies file not found: {cookies_path}\n"
+            'Create one from your saved login with:\n'
+            '  gphotos-dl "<share-url>" --export-cookies ~/Downloads/cookies.txt\n'
+            "(or export it with the 'Get cookies.txt LOCALLY' browser extension).",
+            file=sys.stderr,
+        )
+        return 2
     album_key, auth_key = gpwc_api.parse_share_url(args.album_url)
     if not album_key:
         print("Error: could not find a /share/<token> album key in the URL.", file=sys.stderr)
         return 2
     try:
-        client = gpwc_api.build_client(args.cookies, args.account_index)
-    except RuntimeError as exc:
-        print(f"\nError: {exc}", file=sys.stderr)
+        client = gpwc_api.build_client(cookies_path, args.account_index)
+    except Exception as exc:
+        print(f"\nError building API client: {exc}", file=sys.stderr)
         return 1
 
     print(f"Album key: {album_key}", file=sys.stderr)
@@ -782,6 +829,12 @@ def run(args) -> int:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    if args.export_cookies:
+        try:
+            return run_export_cookies(args)
+        except KeyboardInterrupt:
+            print("\nInterrupted.", file=sys.stderr)
+            return 130
     if args.api or args.api_probe:
         try:
             return run_api(args)

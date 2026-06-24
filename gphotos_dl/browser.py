@@ -56,6 +56,30 @@ def get_page(context):
     return context.pages[0] if context.pages else context.new_page()
 
 
+def export_cookies_txt(context, out_path: str) -> int:
+    """Write the context's cookies to a Netscape cookies.txt (for the gpwc API
+    backend), reusing the already-authenticated Playwright profile so no manual
+    browser-extension export is needed. Returns the number of cookies written."""
+    cookies = context.cookies()
+    lines = ["# Netscape HTTP Cookie File"]
+    for c in cookies:
+        domain = c.get("domain", "")
+        include_sub = "TRUE" if domain.startswith(".") else "FALSE"
+        path = c.get("path", "/") or "/"
+        secure = "TRUE" if c.get("secure") else "FALSE"
+        expires = int(c.get("expires") or 0)
+        if expires < 0:
+            expires = 0  # session cookie; gpwc loads with ignore_expires
+        lines.append(
+            "\t".join([domain, include_sub, path, secure, str(expires),
+                       c.get("name", ""), c.get("value", "")])
+        )
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    return len(cookies)
+
+
 def _looks_signed_out(url: str) -> bool:
     return "accounts.google.com" in url or "/signin" in url or "ServiceLogin" in url
 
