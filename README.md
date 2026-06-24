@@ -77,10 +77,15 @@ gphotos-dl "<album-url>" --out ~/Pictures/uqr-raws --save-to-library
 > - It **never** deletes anything from the shared album — only from your own
 >   library/Trash.
 >
-> *(Status: save → download-original is implemented. The batched auto-delete +
-> auto-empty-Trash cleanup is being added next and is gated behind this same
-> mode; until then, saved copies remain in your library and you should
-> bulk-delete them yourself.)*
+> **Storage cleanup is opt-in via `--empty-trash`** (Option A). Without it,
+> saved copies stay in your library and you bulk-delete them yourself. With it,
+> each saved copy is moved to Trash after download and your **entire Trash is
+> emptied every `--batch-size` photos** (default 25) to keep you under quota.
+> The empty-Trash step only ever clicks a control explicitly labelled "Empty
+> trash" — if it can't find one it skips (no blind clicks) — and it never
+> touches the shared album. **Test on a tiny batch first** (e.g.
+> `--limit 3 --batch-size 3 --empty-trash --debug`) and make sure your Trash
+> holds nothing you want before a full run.
 
 ### Recommended: run photos and videos as two batches
 
@@ -177,6 +182,11 @@ manifest already recorded, with no walking, but won't find items never reached. 
 | `--suspect-max-edge PX` | `1600` | long-edge threshold for the preview heuristic |
 | `--retry-suspect` / `--retry-failed` | off | re-attempt those statuses on resume |
 | `--targeted` | off | fast retry: jump straight to manifest-recorded failed/suspect URLs (skips the walk) |
+| `--save-to-library` | off | get true originals/RAW for shared photos (Save → download library copy) |
+| `--skip-videos` / `--skip-photos` | off | download only one media type (for the two-batch workflow) |
+| `--empty-trash` | off | save mode: move saved copies to Trash + **empty entire Trash** every `--batch-size` (Option A) |
+| `--batch-size N` | `25` | with `--empty-trash`, empty Trash after this many saved photos |
+| `--login` | off | one-time interactive sign-in (required before `--save-to-library`) |
 | `--debug` | off | on each failure, dump the live DOM (item label + control labels) to `<out>/debug` |
 | `--limit N` | `0` | stop after N items (great for a test run) |
 | `--start-open` | off | skip auto-open; use if you've opened an item manually |

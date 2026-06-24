@@ -21,7 +21,7 @@ import time
 from . import __version__, browser, downloader, lightbox, saver
 from .metrics import TypeMetrics
 from .navigation import NavigationTracker, StopReason
-from .state import STATUS_FAILED, STATUS_SUSPECT, Manifest, Record
+from .state import STATUS_FAILED, STATUS_OK, STATUS_SUSPECT, Manifest, Record
 from .urls import is_lightbox_url, photo_id_from_url
 
 
@@ -127,8 +127,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--save-to-library",
         action="store_true",
         help="get true originals (e.g. RAW) for shared PHOTOS by Saving each to "
-        "your library and downloading that copy. Videos download directly. NOTE: "
-        "saved copies are left in your library (storage); auto-cleanup is separate.",
+        "your library and downloading that copy. Videos download directly.",
+    )
+    p.add_argument(
+        "--empty-trash",
+        action="store_true",
+        help="Option A storage management (save mode): after downloading, move "
+        "each saved copy to Trash and EMPTY YOUR ENTIRE GOOGLE PHOTOS TRASH every "
+        "--batch-size photos. GLOBAL and IRREVERSIBLE — wipes everything in Trash.",
+    )
+    p.add_argument(
+        "--batch-size",
+        type=int,
+        default=25,
+        help="with --empty-trash, empty Trash after this many saved photos",
     )
     p.add_argument(
         "--limit",
@@ -458,11 +470,15 @@ def _save_then_download_photo(
         bar.write(f"  failed (photo): {photo_id} — could not open saved copy")
         return
     # Download the owned library copy (full original), recorded under shared id.
-    _process_download(
+    record = _process_download(
         lib_page, photo_id=photo_id, args=args, out_dir=out_dir, manifest=manifest,
         event_timeout_ms=event_timeout_ms, debug_dir=debug_dir, metrics=metrics,
         bar=bar, kind="photo",
     )
+    # Storage management: move the saved copy to Trash once we have the file.
+    if args.empty_trash and record is not None and record.status in (STATUS_OK, STATUS_SUSPECT):
+        saver.delete_open_library_item(lib_page)
+    return record
 
 
 def _run_save_mode(share_page, context, args, out_dir, manifest, metrics, tqdm,
@@ -472,6 +488,17 @@ def _run_save_mode(share_page, context, args, out_dir, manifest, metrics, tqdm,
     lib_page = context.new_page()
     tracker = NavigationTracker()
     bar = tqdm(total=None, unit="item", desc="Save+download")
+    if args.empty_trash:
+        print(
+            f"\n*** --empty-trash ON: every {args.batch_size} saved photos, your "
+            "ENTIRE Google Photos Trash will be emptied (global, irreversible). ***\n",
+            file=sys.stderr,
+        )
+    trash_sink = None
+    if debug_dir:
+        def trash_sink(controls):  # capture Trash controls if Empty-trash not found
+            downloader._write_debug(debug_dir, "empty-trash-controls", {"controls": controls})
+    saved_since_empty = 0
     try:
         processed = 0
         while True:
@@ -504,11 +531,20 @@ def _run_save_mode(share_page, context, args, out_dir, manifest, metrics, tqdm,
                             debug_dir=debug_dir, metrics=metrics, bar=bar, kind="video",
                         )
                     else:
-                        _save_then_download_photo(
+                        record = _save_then_download_photo(
                             share_page, lib_page, photo_id=photo_id, args=args, out_dir=out_dir,
                             manifest=manifest, event_timeout_ms=event_timeout_ms,
                             debug_dir=debug_dir, metrics=metrics, bar=bar,
                         )
+                        if (args.empty_trash and record is not None
+                                and record.status in (STATUS_OK, STATUS_SUSPECT)):
+                            saved_since_empty += 1
+                            if saved_since_empty >= args.batch_size:
+                                bar.write(f"  emptying Trash after {saved_since_empty} saved...")
+                                if not saver.empty_trash(lib_page, controls_sink=trash_sink):
+                                    bar.write("  WARNING: 'Empty trash' control not found; "
+                                              "skipped (storage not reclaimed).")
+                                saved_since_empty = 0
             except Exception as exc:
                 _record_unexpected(manifest, metrics, bar, photo_id, share_page.url, exc)
 
@@ -537,6 +573,10 @@ def _run_save_mode(share_page, context, args, out_dir, manifest, metrics, tqdm,
 
             if not skip:
                 time.sleep(random.uniform(args.min_delay, args.max_delay))
+
+        if args.empty_trash and saved_since_empty > 0:
+            bar.write("  emptying Trash (final batch)...")
+            saver.empty_trash(lib_page, controls_sink=trash_sink)
     finally:
         bar.close()
         try:
