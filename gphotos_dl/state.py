@@ -122,6 +122,7 @@ class Manifest:
 
     def __init__(self, path: str, scan_dir: str | None = None):
         self.path = path
+        self.scan_dir = scan_dir
         # photo_id -> last-seen record info (status, filename, url, media_type).
         # Insertion order preserves first-seen (album) order for targets().
         self._records: dict[str, dict] = {}
@@ -200,6 +201,17 @@ class Manifest:
         status = self.status_of(photo_id)
         if status is None:
             return False
+        if status in (STATUS_OK, STATUS_SUSPECT) and self.scan_dir:
+            rec = self._records[photo_id]
+            filename = rec.get("filename")
+            if not filename:
+                return False
+            try:
+                size = os.path.getsize(os.path.join(self.scan_dir, filename))
+            except OSError:
+                return False
+            if size == 0 or (rec.get("bytes") is not None and size != rec["bytes"]):
+                return False
         if status == STATUS_OK:
             return True
         if status == STATUS_SUSPECT:
@@ -244,7 +256,15 @@ class Manifest:
     def append(self, record: Record) -> None:
         if self._fh is None:
             os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+            # Keep a torn final line separate from the next complete record.
+            needs_newline = False
+            if os.path.exists(self.path) and os.path.getsize(self.path):
+                with open(self.path, "rb") as existing:
+                    existing.seek(-1, os.SEEK_END)
+                    needs_newline = existing.read(1) != b"\n"
             self._fh = open(self.path, "a", encoding="utf-8")
+            if needs_newline:
+                self._fh.write("\n")
         self._fh.write(record.to_json() + "\n")
         self._fh.flush()
         os.fsync(self._fh.fileno())
@@ -253,6 +273,7 @@ class Manifest:
             "filename": record.filename,
             "url": record.url,
             "media_type": record.media_type,
+            "bytes": record.bytes,
         }
         if record.filename:
             self.used_filenames.add(record.filename)

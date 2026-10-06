@@ -184,6 +184,25 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(m.status_of("AAA"), STATUS_OK)
         self.assertIsNone(m.status_of("BBB"))
 
+    def test_append_after_torn_line_survives_reload(self):
+        with open(self.path, "w", encoding="utf-8") as fh:
+            fh.write('{"photo_id": "torn", "status":')
+        with Manifest(self.path) as m:
+            m.append(Record(photo_id="new", status=STATUS_OK))
+        self.assertEqual(Manifest(self.path).status_of("new"), STATUS_OK)
+
+    def test_resume_redownloads_missing_or_truncated_file(self):
+        with Manifest(self.path) as m:
+            m.append(Record(photo_id="photo", status=STATUS_OK, filename="a.jpg", bytes=4))
+        m = Manifest(self.path, scan_dir=self.tmp.name)
+        self.assertFalse(m.should_skip("photo"))
+        with open(os.path.join(self.tmp.name, "a.jpg"), "wb") as fh:
+            fh.write(b"ab")
+        self.assertFalse(m.should_skip("photo"))
+        with open(os.path.join(self.tmp.name, "a.jpg"), "wb") as fh:
+            fh.write(b"abcd")
+        self.assertTrue(m.should_skip("photo"))
+
 
 if __name__ == "__main__":
     unittest.main()
