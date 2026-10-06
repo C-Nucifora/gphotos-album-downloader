@@ -85,9 +85,15 @@ def build_name(
     """Compute a download filename (before de-duplication).
 
     Pipeline: choose base name -> sequential numbering OR cleanup of the stem ->
-    prepend prefix verbatim. The extension is preserved and lower-cased.
+    prepend prefix verbatim. Prefixes cannot contain path separators. Server
+    filenames are reduced to a basename before applying naming options.
+    The extension is preserved and lower-cased.
     """
-    base = suggested or f"{photo_id}{default_ext}"
+    if "/" in prefix or "\\" in prefix:
+        raise ValueError("filename prefix cannot contain path separators")
+    base = (suggested or f"{photo_id}{default_ext}").replace("\\", "/").rsplit("/", 1)[-1]
+    if base in ("", ".", ".."):
+        base = "image" + default_ext
     stem, ext = os.path.splitext(base)
     ext = (ext or default_ext).lower()
 

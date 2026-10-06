@@ -67,6 +67,17 @@ class BuildNameTests(unittest.TestCase):
             build_name("", photo_id="AF1", default_ext=".mp4"), "AF1.mp4"
         )
 
+    def test_server_filename_cannot_escape_output_directory(self):
+        for suggested in ("../../photo.jpg", "/tmp/photo.jpg", r"..\..\photo.jpg"):
+            with self.subTest(suggested=suggested):
+                self.assertEqual(build_name(suggested, photo_id="X"), "photo.jpg")
+
+    def test_prefix_with_path_separator_is_rejected(self):
+        for prefix in ("../", "/tmp/", "..\\"):
+            with self.subTest(prefix=prefix):
+                with self.assertRaises(ValueError):
+                    build_name("photo.jpg", photo_id="X", prefix=prefix)
+
 
 class DedupeTests(unittest.TestCase):
     def test_free_name_unchanged(self):
