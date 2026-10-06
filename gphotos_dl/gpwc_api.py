@@ -8,7 +8,7 @@ autoplay timing, or DOM video-detection. The pipeline becomes API calls:
                                                      auth key = ?key=]
   GetAlbumPage(album_media_key, auth_key)           enumerate every item, with
                                                     media type (video_duration)
-                                                    and is_owned, paginated
+                                                    paginated
   SaveSharedMediaToLibrary(...)                     batch-save shared photos
   GetDownloadToken -> CheckDownloadToken -> GET     download the true original
   MoveToTrash(...)                                  batch cleanup

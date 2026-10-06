@@ -272,10 +272,11 @@ def run_api(args) -> int:
 
     photos = sum(1 for i in items if gpwc_api.item_kind(i) == "photo")
     videos = len(items) - photos
-    owned = sum(1 for i in items if getattr(i, "is_owned", False))
+    owned = sum(1 for i in items if getattr(i, "is_owned", None) is True)
+    unknown = sum(1 for i in items if getattr(i, "is_owned", None) is None)
     print(
         f"\nEnumerated {len(items)} items: {photos} photos, {videos} videos, "
-        f"{owned} already owned",
+        f"{owned} known owned, {unknown} ownership unknown",
         file=sys.stderr,
     )
     for i in items[:5]:
@@ -296,27 +297,29 @@ def _process_api_batch(client, batch, album_key, auth_key, out_dir, manifest, me
     originals, record them, and (optionally) move the saved copies to Trash."""
     from . import gpwc_api
 
-    shared_keys = [it.media_key for it in batch]
-    dedups = [it.dedup_key for it in batch]
+    shared = [it for it in batch if not getattr(it, "is_owned", False)]
+    shared_keys = [it.media_key for it in shared]
+    dedups = [it.dedup_key for it in shared]
+    save_error = None
     try:
-        gpwc_api.save_shared_to_library(client, album_key, shared_keys, auth_key)
+        if shared:
+            gpwc_api.save_shared_to_library(client, album_key, shared_keys, auth_key)
     except Exception as exc:
-        for it in batch:
-            kind = gpwc_api.item_kind(it)
-            manifest.append(Record(photo_id=it.dedup_key, status=STATUS_FAILED,
-                                   media_type=kind, note=f"save failed: {exc}"))
-            metrics.record_failure(kind)
-            bar.update(1)
-        bar.set_postfix(**metrics.postfix())
-        return
+        save_error = f"save failed: {exc}"
 
     # Saved copies can take a moment to index into the library; wait + retry.
-    owned = {}
-    for _ in range(5):
-        time.sleep(2)
-        owned = gpwc_api.resolve_owned_by_dedup(client, dedups)
-        if len(owned) >= len(dedups):
-            break
+    owned = {it.dedup_key: it.media_key for it in batch if getattr(it, "is_owned", False)}
+    resolve_error = None
+    if shared and not save_error:
+        for _ in range(5):
+            time.sleep(2)
+            try:
+                owned.update(gpwc_api.resolve_owned_by_dedup(client, dedups))
+            except Exception as exc:
+                resolve_error = f"could not resolve saved library copy: {exc}"
+                continue
+            if all(owned.get(dk) for dk in dedups):
+                break
     trashed = []
     for it in batch:
         kind = gpwc_api.item_kind(it)
@@ -324,26 +327,38 @@ def _process_api_batch(client, batch, album_key, auth_key, out_dir, manifest, me
         owned_key = owned.get(dk)
         if not owned_key:
             manifest.append(Record(photo_id=dk, status=STATUS_FAILED, media_type=kind,
-                                   note="could not resolve saved library copy"))
+                                   note=save_error or resolve_error or "could not resolve saved library copy"))
             metrics.record_failure(kind)
             bar.update(1)
             bar.set_postfix(**metrics.postfix())
             continue
         try:
             t0 = time.monotonic()
-            content, suggested = gpwc_api.fetch_original(client, owned_key)
+            for attempt in range(1, max(1, args.max_retries) + 1):
+                try:
+                    content, suggested = gpwc_api.fetch_original(client, owned_key)
+                    if not content:
+                        raise RuntimeError("download returned an empty file")
+                    break
+                except Exception:
+                    if attempt >= max(1, args.max_retries):
+                        raise
+                    time.sleep(min(2 ** (attempt - 1), 20))
+            default_ext = ".mp4" if kind == "video" else ".jpg"
             filename = manifest.reserve(
-                suggested or f"{dk}.jpg", photo_id=dk, prefix=args.prefix,
+                suggested or f"{dk}{default_ext}", photo_id=dk, prefix=args.prefix,
                 cleanup=args.cleanup, sequential=args.sequential,
-                default_ext=(".mp4" if kind == "video" else ".jpg"),
+                default_ext=default_ext,
             )
             with open(os.path.join(out_dir, filename), "wb") as fh:
                 fh.write(content)
             manifest.append(Record(photo_id=dk, status=STATUS_OK, filename=filename,
                                    media_type=kind, bytes=len(content),
+                                   attempts=attempt,
                                    seconds=round(time.monotonic() - t0, 2)))
             metrics.record_success(kind, seconds=round(time.monotonic() - t0, 2))
-            trashed.append(dk)
+            if getattr(it, "is_owned", None) is False:
+                trashed.append(dk)
         except Exception as exc:
             manifest.append(Record(photo_id=dk, status=STATUS_FAILED, media_type=kind,
                                    note=f"download failed: {exc}"))
@@ -356,6 +371,8 @@ def _process_api_batch(client, batch, album_key, auth_key, out_dir, manifest, me
             gpwc_api.move_to_trash(client, trashed)
         except Exception as exc:
             bar.write(f"  move-to-trash failed: {exc}")
+    if args.empty_trash and any(getattr(it, "is_owned", None) is None for it in batch):
+        bar.write("  cleanup skipped for items with unknown ownership; saved copies remain in your library")
 
 
 def _run_api_download(args, client, album_key, auth_key, items) -> int:
@@ -379,7 +396,7 @@ def _run_api_download(args, client, album_key, auth_key, items) -> int:
                 metrics.record_failure(kind)
                 bar.update(1)
                 continue
-            if manifest.should_skip(dk, retry_suspect=args.retry_suspect, retry_failed=args.retry_failed):
+            if manifest.should_skip(dk, retry_suspect=args.retry_suspect, retry_failed=True):
                 metrics.record_skip()
                 bar.update(1)
                 bar.set_postfix(**metrics.postfix())
@@ -405,7 +422,7 @@ def _run_api_download(args, client, album_key, auth_key, items) -> int:
     print(f"Files saved to: {out_dir}", file=sys.stderr)
     if metrics.total_failed:
         print(f"{metrics.total_failed} failed — re-run to retry (resumes via manifest).", file=sys.stderr)
-    return 0
+    return 1 if metrics.total_failed else 0
 
 
 def _load_tqdm():

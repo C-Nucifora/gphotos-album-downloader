@@ -43,17 +43,21 @@ gphotos-dl "<share-url>" --export-cookies ~/Downloads/cookies.txt
 # 2) Validate (enumerate the album, no downloads):
 gphotos-dl "<share-url>" --api-probe --cookies ~/Downloads/cookies.txt
 
-# 3) Download originals (photos), with storage-managed cleanup:
+# 3) Download originals (photos):
 gphotos-dl "<share-url>" --out ~/Pictures/album --api --cookies ~/Downloads/cookies.txt \
-    --skip-videos --empty-trash --batch-size 25
+    --skip-videos --batch-size 25
 ```
 
 The API run enumerates every item (media type from the API, so `--skip-videos`
 is exact), batch-saves photos via `SaveSharedMediaToLibrary`, resolves the saved
 copies by `dedup_key`, downloads each original, records to the resumable
-`manifest.jsonl` (keyed by `dedup_key`), and — with `--empty-trash` — moves the
-saved copies to Trash per batch. Re-run to resume; failures retry. If a run hits
+`manifest.jsonl` (keyed by `dedup_key`). Re-run to resume; failures retry. If a run hits
 an auth error, the session cookies expired — re-run `--export-cookies`.
+
+The current gpwc album response does not report ownership. API mode therefore
+skips cleanup for those items even with `--empty-trash`, so saved copies remain
+in your library and count against your storage quota. API mode never empties
+Trash. The browser backend's `--empty-trash` behavior is described below.
 
 ---
 
